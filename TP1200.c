@@ -3,7 +3,8 @@
  * @brief Driver for handling the MEMSCAP TP1200 pressure sensor.
  *
  * This file contains the initialization sequence for the TP1200 sensor,
- * which involves loading all necessary look-up tables from the EEPROM.
+ * which involves loading all necessary look-up tables from the EEPROM,
+ * and the function to get raw sensor readings.
  */
 
 #include <math.h> // For fabs()
@@ -32,12 +33,15 @@ typedef union {
 unsigned int xdata LUT_P[LUT_P_SIZE];
 
 // Global array for the temperature linearization table (ADC vs. Temp C).
-// This must be loaded from the EEPROM before calculations can be performed.
 Lin_Data_Point xdata Lin_data_T[POINTS_LIN_T];
 
 // Global array for the temperature ADC values look-up table.
-// This must be loaded from the EEPROM before calculations can be performed.
 unsigned int xdata LUT_T_ADC[POINTS_T];
+
+// Global variables to hold ADC configuration settings loaded from EEPROM.
+unsigned int xdata ADC_config_P;
+unsigned int xdata ADC_config_T;
+unsigned int xdata ADC_mode;
 
 
 //=============================================================================
@@ -48,21 +52,133 @@ unsigned int xdata LUT_T_ADC[POINTS_T];
  * @brief Top-level function to initialize the sensor by loading all LUTs.
  *
  * This function orchestrates the loading of all necessary look-up tables
- * from the EEPROM into the microcontroller's memory. It calls the loading
- * functions in the correct dependency order.
+ * and configuration settings from the EEPROM into the microcontroller's memory.
+ * It calls the loading functions in the correct dependency order.
  */
 void Initialize_Sensor(void)
 {
-    // 1. Load the temperature linearization data first, as it's needed to
+    // 1. Load the ADC configuration settings first.
+    Load_ADC_Config();
+
+    // 2. Load the temperature linearization data, needed to
     //    calculate the start address for the pressure LUT.
     Load_Lin_Data_T();
 
-    // 2. Load the full temperature ADC table, also needed for the calculation.
+    // 3. Load the full temperature ADC table, also needed for the calculation.
     Load_LUT_T_ADC();
 
-    // 3. Finally, load the decimated and range-limited pressure LUT.
+    // 4. Finally, load the decimated and range-limited pressure LUT.
     //    This function internally calls Calculate_LUT_Start_Address().
     Load_Pressure_LUT();
+}
+
+/**
+ * @brief Gets raw ADC readings for temperature and pressure from the TP1200.
+ *
+ * This function follows the measurement protocol specified in the TP1200 user
+ * manual. It configures the ADC for a single conversion for each channel
+ * (pressure then temperature), waits for the conversion to complete, and
+ * reads the 24-bit result, which is then truncated to 16 bits.
+ *
+ * @param raw_press_adc Pointer to store the raw pressure ADC value.
+ * @param raw_temp_adc  Pointer to store the raw temperature ADC value.
+ */
+void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp_adc)
+{
+    unsigned char msb, mid, lsb;
+    unsigned int single_conversion_mode;
+
+    // The manual specifies setting the 3 MSBs of the mode register to 001
+    // for a single conversion. We preserve the lower bits loaded from EEPROM.
+    single_conversion_mode = (ADC_mode & 0x1FFF) | 0x2000;
+
+    CS_ADC = 0; // Assert ADC chip select
+
+    // --- Get Pressure Reading ---
+    SPIOWrite(0x10); // Command to write to Configuration Register
+    SPIOWrite((ADC_config_P >> 8) & 0xFF);
+    SPIOWrite(ADC_config_P & 0xFF);
+
+    SPIOWrite(0x08); // Command to write to Mode Register
+    SPIOWrite((single_conversion_mode >> 8) & 0xFF);
+    SPIOWrite(single_conversion_mode & 0xFF);
+
+    while(MISO == 1); // Wait for MISO to go low (conversion complete)
+
+    SPIOWrite(0x58); // Command to read Data Register
+    msb = SPIORead();
+    mid = SPIORead();
+    lsb = SPIORead(); // LSB is read but not used for 16-bit value
+    *raw_press_adc = ((unsigned int)msb << 8) | mid;
+
+
+    // --- Get Temperature Reading ---
+    SPIOWrite(0x10); // Command to write to Configuration Register
+    SPIOWrite((ADC_config_T >> 8) & 0xFF);
+    SPIOWrite(ADC_config_T & 0xFF);
+
+    SPIOWrite(0x08); // Command to write to Mode Register
+    SPIOWrite((single_conversion_mode >> 8) & 0xFF);
+    SPIOWrite(single_conversion_mode & 0xFF);
+
+    while(MISO == 1); // Wait for MISO to go low (conversion complete)
+
+    SPIOWrite(0x58); // Command to read Data Register
+    msb = SPIORead();
+    mid = SPIORead();
+    lsb = SPIORead(); // LSB is read but not used for 16-bit value
+    *raw_temp_adc = ((unsigned int)msb << 8) | mid;
+
+    CS_ADC = 1; // De-assert ADC chip select
+}
+
+
+/**
+ * @brief Loads ADC configuration settings from the EEPROM.
+ *
+ * This function reads the ADC_Mode, ADC_config_P, and ADC_config_T values
+ * from their fixed addresses in the EEPROM. These are required to perform
+ * sensor measurements. It reads 32-bit values but only stores the lower 16 bits.
+ */
+void Load_ADC_Config(void)
+{
+    unsigned char lsb, msb;
+
+    // --- Read ADC_Mode (Address 24) ---
+    CS_EE = 0;
+    SPIOWrite(0x03); // Read command
+    SPIOWrite((ADC_MODE_BASE_ADDRESS >> 8) & 0xFF);
+    SPIOWrite(ADC_MODE_BASE_ADDRESS & 0xFF);
+    lsb = SPIORead(); // LSB of lower word
+    msb = SPIORead(); // MSB of lower word
+    ADC_mode = ((unsigned int)msb << 8) | lsb;
+    SPIORead(); // Read and discard upper word
+    SPIORead();
+    CS_EE = 1;
+
+    // --- Read ADC_config_P (Address 32) ---
+    CS_EE = 0;
+    SPIOWrite(0x03); // Read command
+    SPIOWrite((ADC_CONFIG_P_BASE_ADDRESS >> 8) & 0xFF);
+    SPIOWrite(ADC_CONFIG_P_BASE_ADDRESS & 0xFF);
+    lsb = SPIORead();
+    msb = SPIORead();
+    ADC_config_P = ((unsigned int)msb << 8) | lsb;
+    SPIORead();
+    SPIORead();
+    CS_EE = 1;
+
+    // --- Read ADC_config_T (Address 68) ---
+    CS_EE = 0;
+    SPIOWrite(0x03); // Read command
+    SPIOWrite((ADC_CONFIG_T_BASE_ADDRESS >> 8) & 0xFF);
+    SPIOWrite(ADC_CONFIG_T_BASE_ADDRESS & 0xFF);
+    lsb = SPIORead();
+    msb = SPIORead();
+    ADC_config_T = ((unsigned int)msb << 8) | lsb;
+    SPIORead();
+    SPIORead();
+    CS_EE = 1;
 }
 
 
