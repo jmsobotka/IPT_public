@@ -40,6 +40,7 @@
 #include "Main.H"
 #include "float.H"
 #include "LibSet.h"
+#include "TP1200.h" // <<< CHANGE 1: INCLUDE NEW HEADER
 
 // compiler includes
 #include "stdio.H"
@@ -68,17 +69,6 @@ char code EXVERSION[] = VERSION;
 char code EXPART[] = PART;
 char code EXFILE[] = __FILE__;
 char code EXTIME[] = __DATE__ " " __TIME__;
-
-////////////////////////////////////////////////////////////////////////////
-// bit variables
-
-// EEPROM Commands
-sbit CS_EE=P1^2; // Chip Select EEPROM
-sbit CS_TP=P1^1; // Chip Select Temperature
-sbit CS_PR=P1^0; // Chip Select Pressure
-sbit CS_5V=P2^7; // 5 Volt Enable
-
-sbit LED=P2^4;   // LED
 
 ////////////////////////////////////////////////////////////////////////////
 // type defs
@@ -152,20 +142,23 @@ byte PrsRange = 0;  // pressure range  coefficient 37 from IPT eeprom
 // EEProm byte array
 xdata byte ee[EE_SIZE]; // not required, but its a one time event
 
+// <<< NEW VARIABLES FOR TP1200
+float compensated_temp_c;
+float compensated_press;
 
 /* ///////////////////////////////////////////////////////////////////////////
 	Start of C 
 ////////////////////////////////////////////////////////////////////////// */
-main() {
-byte a;
-data char RetStr[10]; // return packet header (not used for pressure)
-
+void main() {
+    byte a;
+    data char RetStr[10]; // return packet header (not used for pressure)
+    unsigned int raw_temp_adc, raw_press_adc;
+    
 	CS_5V = 1; // 5 Volt enable
 
 	// turn off chip selects - active low
 	
 	CS_EE=1; 
-	CS_TP=1;
 	CS_PR=1;
 
 	Init_Device();
@@ -236,19 +229,7 @@ data char RetStr[10]; // return packet header (not used for pressure)
 		NetAdd = NVR_Buf.NetAdd;
 	}
 
-	// read the sensor eeprom
-	a = 10;
-	while( (!ReadEEProm()) && (--a)){
-		} // will watchdog reset here if sensor not present
-		  // just what we want, retries the sensor and 
-		  // causes LED to flash at high rate
-
-	if(!a) SetRStatus( RSP, RSP_CHECKSUM ); 
-
-	// intialize IPT devices
-	InitPressure();	
-	InitTemperature();												  
-	ReadTemperature(); // set up temperature compensation
+    Initialize_Sensor(); // <<< CALL TO NEW SENSOR INITIALIZER
 
 ////////////////////////////////////////////////////////////
 	EA = 1;  // interrupt enable
@@ -274,7 +255,7 @@ data char RetStr[10]; // return packet header (not used for pressure)
 		goto idle;
 
 		task7: // 1000ms 1hz
-			ReadTemperature();
+			// ReadTemperature(); // This call is removed as temperature is read with pressure.
 			goto idle;
 	
 		task6: // 500ms 2hz
@@ -296,7 +277,11 @@ data char RetStr[10]; // return packet header (not used for pressure)
 			goto idle;
 
 		task1: // 15.625ms   64hz
-			ReadPressure();	
+            Get_Raw_Sensor_Readings(&raw_press_adc, &raw_temp_adc);
+            g_raw_temp_adc = raw_temp_adc; // Update global for maintenance function
+            compensated_temp_c = Calculate_Compensated_Temperature(raw_temp_adc);
+            compensated_press = Calculate_Compensated_Pressure(raw_press_adc, raw_temp_adc);
+            psi = Apply_System_Calibration(compensated_press, offset, span);
 			goto idle;
 
 		task0: // 7.8125ms   128hz
@@ -392,7 +377,7 @@ data char RetStr[10]; // return packet header (not used for pressure)
 			 	case HC_M_:
 					printf("%s%bd(PSI)\r", RetStr, PrsRange);
 					// this value is ballpark only because it is temperature dependant
-//					printf("%s%7.3f\r", RetStr , CompPressureUnAdjusted(PMax.l) );
+					printf("%s%7.3f\r", RetStr , CompPressureUnAdjusted(PMax.l) );
 				   	break;
 
 // production date
@@ -476,149 +461,6 @@ data char RetStr[10]; // return packet header (not used for pressure)
 			}
 		}
 	}
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
-	InitTemperature
-		TBD 	: Read back check
-	Arguments	:
-	Returns		:
-////////////////////////////////////////////////////////////////////////// */
-code byte TMode[] = {0x10, 0x80 };		// Mode Register - 20 hz
-void InitTemperature() {
-code byte TFilter[] = {0x20, 0x03 };	// Filter Register - buffer and gain per data sheet
-
-	CS_TP=0;	  	  // chip select
-	SPIOWriteBuf( TFilter, sizeof(TFilter));
-	SPIOWriteBuf( TMode, sizeof(TMode));
-	CS_TP=1;	  	  // chip select
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
-	ReadTemperature
-		TBD 	:  
-	Arguments	:
-	Returns		: tp 		
-////////////////////////////////////////////////////////////////////////// */
-void ReadTemperature() {
-byte a;
-byte b;
-
-	CS_TP=0;	  	  	// chip select
-
-	b = 1;
-	while( MISO && b ) {		// wait for conversion
-		b++;	
-	};
-
-	SPIOWrite( 0x38 );	//  Send single read
-	b = 1;
-	while( MISO && b) {		// wait for conversion
-		b++;	
-	};
-
-	for( a = 0; a < 2; a++ ) {
-		tp.c[a] = SPIORead();
-  	}
-
-	SPIOWriteBuf( TMode, sizeof(TMode));
-
-	CS_TP=1;	  	  // chip select
-
-	CompTemperature();
-
-	// compare against eeprom max/min : set status for temperature
-	if(tp.w > TMax.w) SetRStatus( RSS, RSS_OVERTEMP ); 
-	if(tp.w < TMin.w) SetRStatus( RSS, RSS_UNDERTEMP ); 
-
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
-	InitPressure
-	Arguments	:
-	Returns    	:
-////////////////////////////////////////////////////////////////////////// */
-code byte PConfig[] = {0x10, 0x10, 0x20 };	    // Configuration Register - buffer and gain per data sheet
-code byte PMode[] = {0x08, 0x30, 0x01 };	    // Mode Register - power on, 500 hz
-void InitPressure() {
-byte a, b;
-
-	ResetPressureADC();
-
-	CS_PR=0;	  	  // chip select
-
-	SPIOWriteBuf( PConfig, sizeof(PConfig));		// write
-	SPIOWrite( 0x50 ); 								// read back
-	a = SPIORead();
-	b = SPIORead();
- 	if( a != PConfig[1] || b != PConfig[2]) SetRStatus( RSS, RSS_ADCINIT );
-
-	SPIOWriteBuf( PMode, sizeof(PMode));			// write
-	SPIOWrite( 0x48 ); 								// read back
-	a = SPIORead();
-	b = SPIORead();
-	if ( a != PMode[1] || b != PMode[2] ) SetRStatus( RSS, RSS_ADCINIT );
-
-	SPIOWrite( 0x40 ); // read status register  (normal return is 0x88)
-	a = SPIORead();
-	if( a != 0x88 ) SetRStatus( RSS, RSS_ADCERROR );
-	//printf("IP Status %bX\r", a );
-
-	CS_PR=1;	  	  // chip select
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
-	ReadPressure
-		over and under errors
-	Arguments	:		
-	Returns 	: pr
-/////////////////////////////////////////////////////////////////////////// */
-void ReadPressure() {
-byte a;
-byte b;
-static byte c;
-
-	CS_PR=0;	  	  	// chip select
-
-	pr.c[0] = 0;		// 24 bit, zero unused byte
-	SPIOWrite( 0x58 );	// read command to Communications register 
-
-	b = 1;
-	while( MISO && b ) {// wait for conversion
-		b++;	
-	};
-							  
-	// read 3 bytes
-	for( a = 1; a < 4; a++ ) {
-		pr.c[a] = SPIORead();
-  	}
-
-	SPIOWriteBuf( PMode, sizeof(PMode)); 	// start next read
-
-	CS_PR=1;	  	  						// chip select
-
-	// set status for pressure
-	if(pr.l > PMax.l) SetRStatus( RSS, RSS_OVERPRS ); 
-	if(pr.l < PMin.l) SetRStatus( RSS, RSS_UNDERPRS ); 
-
-//#define NOINTEGRATION
-#ifdef NOINTEGRATION
-	acc = pr.l;
-	CompPressure();
-#else
-//	integration
-//	2 4
-//	3 8
-//	4 16
-	acc += pr.l;
-	c++;
-	if( c > 3 ) {
-		acc >>= 2;
-		CompPressure();
-		c = 0;
-		acc = 0;
-	}
-#endif													   
 }
 
 /* ///////////////////////////////////////////////////////////////////////////
@@ -757,125 +599,22 @@ byte a = 1;
 	return SPI0DAT; 
 }
 
-/* ///////////////////////////////////////////////////////////////////////////
-	CompPressure
-		See IPT See IPT ADS-14152 Rev B 8_08.pdf and Compensation spreadsheet
-
-	Y = A + x(F1 + x(F2 + x(F3 +x(F4 + x(F5 + x(F6)))))) 
-
-	Arguments	: f factors
-	Returns 	: psi
-/////////////////////////////////////////////////////////////////////////// */
-void CompPressure() {
-
-	//p = pr.l;
-	//p = acc;
-	n1 = acc;
-	n2 = f[5];
-	M32_24();
-
-	n2 += f[4];
-	M32_24();
-
-	n2 += f[3];
-	M32_24();
-
-	n2 += f[2];
-	M32_24();
-
-	n2 += f[1];
-	M32_24();
-
-	n2 += f[0];
-	M32_24();
-
-/*
-	psi = ((float)(n2 + cof[0])) / SCALE;  // convert back to float
-	// apply calibration
-	psi += (float)(offset * .0001);
-	psi += (float)(15.5-psi)*(span * .00001);
-*/
-
-	n2 = n2 + cof[0];
-	// apply calibration
-	n2 += (int)offset;	// Z lowalt
-
-  	psi = (float)n2 / scale; // convert integer pressure back to a psi float
-	psi += ((float)PrsRange-psi)*((float)span * .000001); // X highalt 1/3 foot resolution
-
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
-	CompPressureUnAdjusted
-		See IPT See IPT ADS-14152 Rev B 8_08.pdf and Compensation spreadsheet
-	NOTE		USED ONLY BY MAINTENANCE, NOT BY ANY HONEWELL COMMANDS
-	 			: for converting eeprom min and max
-	Arguments	: f factors
-	Returns 	: psi
-/////////////////////////////////////////////////////////////////////////// */
-float CompPressureUnAdjusted(long p) {
-
-	n1 = p;
-	n2 = f[5];
-	M32_24();
-
-	n2 += f[4];
-	M32_24();
-
-	n2 += f[3];
-	M32_24();
-
-	n2 += f[2];
-	M32_24();
-
-	n2 += f[1];
-	M32_24();
-
-	n2 += f[0];
-	M32_24();
-
-	return ((float)(n2 + cof[0])) / scale;
-}
-
-
-/* ///////////////////////////////////////////////////////////////////////////
-	CompTemperature
-		See IPT ADS-14152 Rev B 8_08.pdf and compensation spreadsheet
-
-	F1 = a1 + x(b1 + x(c1 + x(d1 + x(e1 + x(f1))))) 
-	F2 = a2 + x(b2 + x(c2 + x(d2 + x(e2 + x(f2))))) 
-	F3 = a3 + x(b3 + x(c3 + x(d3 + x(e3 + x(f3))))) 
-	F4 = a4 + x(b4 + x(c4 + x(d4 + x(e4 + x(f4))))) 
-	F5 = a5 + x(b5 + x(c5 + x(d5 + x(e5 + x(f5))))) 
-	F6 = a6 + x(b6 + x(c6 + x(d6 + x(e6 + x(f6))))) 
-
-	Arguments	: cof factors
-	Returns 	: f factors
-/////////////////////////////////////////////////////////////////////////// */
-void CompTemperature() {
-byte i = 0;
-
-	// temperature factors
-	for( i = 0; i < 6; i++ ) {
-		n1 = (long)tp.w;;
-		n2 = cof[31+i];
-		M32_16();
-
-		n2 += cof[25+i];
-		M32_16();
-
-		n2 += cof[19+i];
-		M32_16();
-
-		n2 += cof[13+i];
-		M32_16();
-
-		n2 += cof[7+i];
-		M32_16();
-
-		f[i] = n2 + cof[1+i]; 
-	
-	}	
+/**
+ * @brief Calculates unadjusted, factory-compensated pressure. (For Maintenance)
+ *
+ * This function provides the factory-compensated pressure value before any
+ * system-level offset and span calibration is applied. It uses the most
+ * recent temperature reading for its calculation. The prototype is matched
+ * to the original function for compatibility with the maintenance library.
+ *
+ * @param p The raw pressure ADC value to be compensated.
+ * @return The factory-compensated pressure as a float.
+ */
+float CompPressureUnAdjusted(long p)
+{
+    // Cast the input 'long' to 'unsigned int' to match the new function's
+    // requirements and use the last known temperature reading.
+    return Calculate_Compensated_Pressure((unsigned int)p, g_raw_temp_adc);
 }
 
 /* ///////////////////////////////////////////////////////////////////////////
@@ -912,20 +651,4 @@ float TemperatureC( word r ) {
 /////////////////////////////////////////////////////////////////////////// */
 float TemperatureF( word r ) {
 	return((TemperatureC(r)*9)/5)+32;
-}
-
-
-void ResetPressureADC() {
-byte a, b= 0xFF;
-	SPI0CN    = 0x02; // spio off
-	MOSI = 1;
-	CS_PR= 0;
-	for( a = 0; a < 65; a ++ ) {
-		SCK	=1;
-		while( b-- );
-		SCK	=0;
-		while( b-- );
-	}
-	CS_PR= 1;
-	SPI0CN    = 0x03; // spio on
 }

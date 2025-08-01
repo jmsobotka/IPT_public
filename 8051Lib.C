@@ -1257,41 +1257,28 @@ byte a;
 
 //	Read EEprom
 		case 10:
-			ReadEEProm();
+			// The old logic is removed and replaced with a single call
+            // to the new display function, which handles all the necessary
+            // EEPROM reads and printing for the MEMSCAP sensor.
 			printf("%s",Head);	
-			for( a = 0; a < COF_float_SIZE; a++ ) {
-				tf.c[0] = ee[a*4];
-				tf.c[1] = ee[a*4+1];
-				tf.c[2] = ee[a*4+2];
-				tf.c[3] = ee[a*4+3];
-
-				printf( "% 11ld %f\r", cof[a], tf.f );
-			}
-			printf( "Pressure Max % 11ld %f\r", PMax.l, CompPressureUnAdjusted(PMax.l) );
-			printf( "Pressure Min % 11ld %f\r", PMin.l, CompPressureUnAdjusted(PMin.l));
-			printf( "Temperature Max % 6u %f\r", TMax.w, TemperatureF(TMax.w));
-			printf( "Temperature Min % 6u %f\r", TMin.w, TemperatureF(TMin.w));
-			break;
+			Display_MEMSCAP_EEPROM_Info();
+            break;
 
 //	
 		case 11:
-			InitPressure();
-			printf("%s Init Pressure\r", Head);
+			printf("Init Pressure Not Supported\r");
 			break;
 //	
 		case 12:
-			ReadPressure();
 			printf( "Read: %lu %u %f\r", pr.l, tp.w, psi );
 			break;
 //
 		case 13:
-			InitTemperature();
-			printf("Init Temperature\r");
+			printf("Init Temperature Not Supported\r");
 			break;
 //
 		case 14:
-			ReadTemperature();
-			printf( "Read: %u\r", tp.w );
+			printf( "Read Temperature Not Supported\r");
 			break;
 
 //	offset

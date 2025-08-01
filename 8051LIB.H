@@ -336,3 +336,4 @@ void A_Color( byte a, byte c );
 void A_Pos( byte x, byte y );
 void MenuTask( byte task );
 
+void Display_MEMSCAP_EEPROM_Info(void);

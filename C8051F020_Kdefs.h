@@ -297,6 +297,12 @@ sbit RXOVRN = SFR_SPI0CN^4;          // SPI 0 Rx Overrun Flag
 sbit TXBSY = SFR_SPI0CN^3;           // SPI 0 Tx Busy Flag
 sbit SLVSEL = SFR_SPI0CN^2;          // SPI 0 Slave Select
 sbit MSTEN = SFR_SPI0CN^1;           // SPI 0 Master Enable
+
+sbit CS_EE=P1^2; // Chip Select EEPROM
+sbit CS_PR=P1^0; // Chip Select Pressure
+sbit CS_5V=P2^7; // 5 Volt Enable
+sbit LED=P2^4;   // LED
+
 sbit SPIEN = SFR_SPI0CN^0;           // SPI 0 SPI Enable
 
 //-----------------------------------------------------------------------------
