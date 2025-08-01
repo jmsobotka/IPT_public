@@ -28,6 +28,10 @@
 #define ADC_MODE_BASE_ADDRESS 24
 #define ADC_CONFIG_P_BASE_ADDRESS 32
 #define ADC_CONFIG_T_BASE_ADDRESS 68
+#define ADC_MAX_P_BASE_ADDRESS 44
+#define ADC_MIN_P_BASE_ADDRESS 48
+#define MAX_P_BASE_ADDRESS 52
+#define MIN_P_BASE_ADDRESS 54
 #define LUT_P_BASE_ADDRESS 788
 #define LUT_T_ADC_BASE_ADDRESS 228
 #define LUT_P_ADC_BASE_ADDRESS 108
@@ -36,10 +40,6 @@
 //=============================================================================
 // Hardware Pin Definitions
 //=============================================================================
-
-// Chip Select for the ADC. This is a placeholder and may need to be
-// adjusted to match the final hardware schematic.
-sbit CS_ADC = P1^5;
 
 //=============================================================================
 // Type Definitions
@@ -64,6 +64,9 @@ extern unsigned int xdata LUT_P_ADC[POINTS_P];
 extern unsigned int xdata ADC_config_P;
 extern unsigned int xdata ADC_config_T;
 extern unsigned int xdata ADC_mode;
+extern int xdata Max_P;
+extern int xdata Min_P;
+extern unsigned int xdata g_raw_temp_adc;
 
 
 //=============================================================================
@@ -89,6 +92,11 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc);
  * @brief Calculates the final compensated pressure.
  */
 float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int comp_temp_adc);
+
+/**
+ * @brief Applies the final system-level offset and span calibration.
+ */
+float Apply_System_Calibration(float compensated_press, int offset, int span);
 
 /**
  * @brief Loads the pressure look-up table (LUT_P) from the EEPROM.
@@ -119,6 +127,5 @@ void Load_LUT_P_ADC(void);
  * @brief Loads ADC configuration settings from the EEPROM.
  */
 void Load_ADC_Config(void);
-
 
 #endif // TP1200_H
