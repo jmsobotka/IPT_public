@@ -25,6 +25,8 @@
 #define POINTS_LIN_T 12       // Number of points in the temp linearization table.
 
 // EEPROM Base Addresses
+#define SENSOR_SN_BASE_ADDRESS 8
+#define CAL_DATE_BASE_ADDRESS 20
 #define ADC_MODE_BASE_ADDRESS 24
 #define ADC_CONFIG_P_BASE_ADDRESS 32
 #define ADC_CONFIG_T_BASE_ADDRESS 68
@@ -52,6 +54,13 @@ typedef struct {
     unsigned int adc_value;
 } Lin_Data_Point;
 
+// New struct to hold product information read from EEPROM
+typedef struct {
+    long serial_number;
+    unsigned int cal_year;
+    unsigned char cal_month;
+    unsigned char cal_day;
+} ProductInfoType;
 
 //=============================================================================
 // Global Variable Declarations
@@ -67,65 +76,30 @@ extern unsigned int xdata ADC_mode;
 extern int xdata Max_P;
 extern int xdata Min_P;
 extern unsigned int xdata g_raw_temp_adc;
+extern ProductInfoType xdata g_ProductInfo; // New global for product info
 
 
 //=============================================================================
 // Function Prototypes
 //=============================================================================
 
-/**
- * @brief Top-level function to initialize the sensor by loading all LUTs.
- */
 void Initialize_Sensor(void);
-
-/**
- * @brief Gets raw ADC readings for temperature and pressure from the TP1200.
- */
 void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp_adc);
-
-/**
- * @brief Calculates the final compensated temperature.
- */
 float Calculate_Compensated_Temperature(unsigned int raw_temp_adc);
-
-/**
- * @brief Calculates the final compensated pressure.
- */
 float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int comp_temp_adc);
-
-/**
- * @brief Applies the final system-level offset and span calibration.
- */
 float Apply_System_Calibration(float compensated_press, int offset, int span);
-
-/**
- * @brief Loads the pressure look-up table (LUT_P) from the EEPROM.
- */
+float CompPressureUnadjusted(long p);
 void Load_Pressure_LUT(void);
-
-/**
- * @brief Calculates the starting memory address for the LUT_P table read.
- */
 unsigned int Calculate_LUT_Start_Address(void);
-
-/**
- * @brief Loads the temperature linearization table (Lin_data_T) from EEPROM.
- */
 void Load_Lin_Data_T(void);
-
-/**
- * @brief Loads the temperature ADC look-up table (LUT_T_ADC) from EEPROM.
- */
 void Load_LUT_T_ADC(void);
-
-/**
- * @brief Loads the pressure ADC values look-up table (LUT_P_ADC) from EEPROM.
- */
 void Load_LUT_P_ADC(void);
-
-/**
- * @brief Loads ADC configuration settings from the EEPROM.
- */
 void Load_ADC_Config(void);
+void Load_Product_Info(void); // New function prototype
+void Read_EEPROM_Bytes(unsigned char* buffer, unsigned int start_address, unsigned int count);
+void Display_MEMSCAP_EEPROM_Info(void);
+void Print_Float(float f, unsigned char precision);
+byte ReadEEProm(void);
+unsigned long Calculate_CRC32(unsigned char* d, unsigned int count);
 
 #endif // TP1200_H

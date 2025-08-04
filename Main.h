@@ -2,7 +2,6 @@
 /////////////////////////////////////////////////////////////
 // Prototypes
 void Init_Device(void);
-byte ReadEEProm(void);
 void InitPressure(void);
 void ReadPressure(void);
 void InitTemperature(void);
@@ -10,11 +9,10 @@ void ReadTemperature(void);
 void CompPressure(void);
 void CompTemperature(void);
 float CompPressureUnAdjusted(long p);
-float TemperatureC( word r );
-float TemperatureF( word r );
+//float TemperatureC( word r );
+//float TemperatureF( word r );
 void ResetPressureADC(void);
-bit SignCheck( long a, float b );
-void SPIOWriteBuf( byte * b, byte len );
+//void SPIOWriteBuf( byte * b, byte len );
 void SPIOWrite( byte b );
 byte SPIORead( void );
 void WriteNVRam( void );
@@ -82,11 +80,6 @@ extern byte t4o, t4m;
 
 /////////////////////////////////////////////////////////////////
 // DATA exports
-// raw pressure and temperature
-extern data ULongByteUnion pr;
-extern data WordByteUnion tp;
-// union uses compiler to convert eeprom byte data to float
-extern data FloatByteUnion tf;
 
 extern data int scale;
  
@@ -103,7 +96,6 @@ extern data char sgn;
 extern long cof[];
 
 // structures for converting eeprom data
-extern ULongByteUnion PMin, PMax, IPTSerialNo;
 extern WordByteUnion TMin, TMax;
 
 // EEProm byte array

@@ -1270,7 +1270,8 @@ byte a;
 			break;
 //	
 		case 12:
-			printf( "Read: %lu %u %f\r", pr.l, tp.w, psi );
+			//printf( "Read: %lu %u %f\r", pr.l, tp.w, psi );
+			printf("Not supported\r");
 			break;
 //
 		case 13:
@@ -1295,61 +1296,25 @@ byte a;
 				
 //	32 bit mult with 24 bit shift right
 		case 17:
-			sscanf( cp,	"%ld:%ld", &n1, &n2);
-			M32_24();
-			printf("\r=  %lu %ld  \r", Hr.l, n2);
+			//sscanf( cp,	"%ld:%ld", &n1, &n2);
+			//M32_24();
+			//printf("\r=  %lu %ld  \r", Hr.l, n2);
+			printf("Not supported\r");
 
 			break;	
 
 //	32 bit mult with 16 bit shift right
 		case 18:
-			sscanf( cp,	"%ld:%ld", &n1, &n2);
-			M32_16();
-			printf("\rM32_16 = %ld\r", n2);
+			//sscanf( cp,	"%ld:%ld", &n1, &n2);
+			//M32_16();
+			//printf("\rM32_16 = %ld\r", n2);
+			printf("Not supported\r");
 			break;	
 
 	} // parse switch
 }
 
 #endif
-
-//////////////////////////////////////////////////////////////////
-// 32 bit multiply into a 64 bit register, then shift right by 24
-// uses absolute memory locations 0x30 to 0x3F: see LongMult 
-// n1 and n2 are factors, n1 remains, quad result into Hr, long shifted result into n2
-void M32_24() {
-	sgn = 1;     // normalize sign
-	if( n2 < 0 ) { n2 = -n2; sgn = -1 ; }
-	if( n1 < 0 ) { n1 = -n1; sgn *= -1; }
-	mul32bit();
-	// 24 bit quad shift right
-	// Hr.l <<=8;
-	Hr.c[0]=Hr.c[1];
-	Hr.c[1]=Hr.c[2];
-	Hr.c[2]=Hr.c[3];
-	Hr.c[3]=Lr.c[0];
-	n2 = Hr.l;
-	n2 *= sgn;
-}
-
-//////////////////////////////////////////////////////////////////
-// 32 bit multiply into a 64 bit register, then shift right by 16
-// uses absolute memory locations 0x30 to 0x3F: see LongMult 
-// n1 and n2 are factors, n1 remains, quad result into Hr, long shifted result into n2
-void M32_16() {
-	sgn = 1;     // normalize sign
-	if( n2 < 0 ) { n2 = -n2; sgn = -1 ; }
-//	if( n1 < 0 ) { n1 = -n1; sgn *= -1; }
-	mul32bit();	 // multiply into a quad
-	// 16 bit quad shift right
-	// Lr.l >>=16; this is a Call in C, so data moves are faster
-	Lr.c[3]=Lr.c[1];
-	Lr.c[2]=Lr.c[0];
-	Lr.c[1]=Hr.c[3];
-	Lr.c[0]=Hr.c[2];
-	n2 = Lr.l;
-	n2 *= sgn;
-}
 
 /* ///////////////////////////////////////////////////////////////////////////
 	SetRStatus

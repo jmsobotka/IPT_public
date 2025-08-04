@@ -87,26 +87,6 @@ byte CRC;
 // DATA
 ////////////////////////////////////////////////////////////////////////
 
-// union uses compiler to convert eeprom byte data to float
-data FloatByteUnion tf;
-
-// raw pressure and temperature from ADC 
-data ULongByteUnion pr;
-data WordByteUnion tp;
-
-// integration accumulator
-data unsigned long acc = 0;
-
-// 32 bit multiply	: registered interface to assembly
-data long n1 			_at_ 0x30; 
-data long n2 			_at_ 0x34; 
-data ULongByteUnion Hr 	_at_ 0x38; 
-data ULongByteUnion Lr 	_at_ 0x3C; 
-data char sgn;
-
-// temperature factors
-data long f[6];
-
 // result
 data float psi = 0;
 
@@ -125,26 +105,9 @@ data byte ck1, ck2;
 // nvram buffer
 NVR_BufType NVR_Buf;
 
-// temperature compensation coefficients from IPT eeprom as longs
-long cof[COF_float_SIZE];
-
-// structures for converting eeprom data
-ULongByteUnion PMin, PMax, IPTSerialNo;
-WordByteUnion TMin, TMax;
-
-byte PrsRange = 0;  // pressure range  coefficient 37 from IPT eeprom
-					// used for calibration
-
 ////////////////////////////////////////////////////////////////////////
 // XDATA
 ////////////////////////////////////////////////////////////////////////
-
-// EEProm byte array
-xdata byte ee[EE_SIZE]; // not required, but its a one time event
-
-// <<< NEW VARIABLES FOR TP1200
-float compensated_temp_c;
-float compensated_press;
 
 /* ///////////////////////////////////////////////////////////////////////////
 	Start of C 
@@ -153,6 +116,11 @@ void main() {
     byte a;
     data char RetStr[10]; // return packet header (not used for pressure)
     unsigned int raw_temp_adc, raw_press_adc;
+    float compensated_temp_c;
+    float compensated_press;
+
+	WDTCN = 0xDE;
+	WDTCN = 0xAD;
     
 	CS_5V = 1; // 5 Volt enable
 
@@ -375,46 +343,45 @@ void main() {
 
 // pressure range
 			 	case HC_M_:
-					printf("%s%bd(PSI)\r", RetStr, PrsRange);
+					printf("%s%bd(PSI)\r", RetStr, (Max_P - Min_P));
 					// this value is ballpark only because it is temperature dependant
-					printf("%s%7.3f\r", RetStr , CompPressureUnAdjusted(PMax.l) );
+					//printf("%s%7.3f\r", RetStr , CompPressureUnAdjusted(PMax.l) );
 				   	break;
 
 // production date
 			 	case HC_P_:		
-					printf("%s%02bd/%02bd/%02bd\r", RetStr, ee[EE_MONTH], ee[EE_DAY], ee[EE_YEAR] );
+					printf("%s%02bu/%02bu/%04u\r", RetStr, g_ProductInfo.cal_month, g_ProductInfo.cal_day, g_ProductInfo.cal_year );
 					break;
 					
 // pressure				   note: this command DOES NOT return the command string...sigh
 			 	case HC_P1:
-					switch (NVR_Buf.displayunits) {
-						case 0:
-							printf("#%02bdCP=%7.4f\r", NetAdd, psi );
-							break;
-						case 1:
-							printf("#%02bdCP=%7.3f\r", NetAdd, (psi * PSI_TO_MBAR) );
-							break;
+					printf("#%02bdCP=", NetAdd);
+					if (NVR_Buf.displayunits == 0) { // PSI
+						Print_Float(psi, 4);
+					} else { // MBAR
+						Print_Float(psi * PSI_TO_MBAR, 3);
 					}
+					printf("\r");
 					break;
 // serial number
 			 	case HC_S_:	
-					IPTSerialNo.c[0] = ee[EE_SN];	
-					IPTSerialNo.c[1] = ee[EE_SN+1];	
-					IPTSerialNo.c[2] = ee[EE_SN+2];	
-					IPTSerialNo.c[3] = ee[EE_SN+3];	
-					printf("%s%ld\r", RetStr, IPTSerialNo.l );
+					printf("%s%lu\r", RetStr, g_ProductInfo.serial_number );
 					break;
 					
 // temperature C
 			 	case HC_T1:
 					// curve fit temperature
-					printf("%s%4.1f\r", RetStr , TemperatureC(tp.w));
+					printf("%s", RetStr);
+                    Print_Float(compensated_temp_c, 1);
+                    printf("\r");
 				   	break;
 
 // temperature F
 			 	case HC_T3:
 					// curve fit temperature and convert to F
-					printf("%s%4.1f\r", RetStr , TemperatureF(tp.w));
+					printf("%s", RetStr);
+                    Print_Float((compensated_temp_c * 9.0f / 5.0f) + 32.0f, 1);
+                    printf("\r");
 				   	break;
 
 // version number
@@ -464,109 +431,19 @@ void main() {
 }
 
 /* ///////////////////////////////////////////////////////////////////////////
-	ReadEEProm
-	Arguments	:	
-	Returns 	: cof and success flag
-/////////////////////////////////////////////////////////////////////////// */
-byte ReadEEProm() {
-byte a;
-bit Overflow;
-code byte EEPRead[] = {EE_READ, 0}; 
-
-	CS_EE=0;  // chip select
-
-	// command
-	SPIOWriteBuf( EEPRead, sizeof(EEPRead));
-
-	// read data, with checksum, address auto increments
-	ck1 = ck2 = 0;
-
-	// read entire for checksum calculation
-	for( a = 0; a < EE_SIZE; a++ ) {
-
-		ee[a] = SPIORead(); // store as byte
-	
-		// Fletchers Checksum
-		ck1 += ee[a];  // 0
-		ck2 += ck1;    // 0
-	}
-	
-	CS_EE=1;  // end of read, chip deselect
-
-	// checksum ok?
-	if((ck1 == 0) && (ck2 == 0)) {
-
-		
-		scale = SCALE;
-		do {
-			Overflow = 0;
-			// convert coeficient bytes to long integers
-			for( a = 0; a < COF_float_SIZE; a++ ) {
-				tf.c[0] = ee[a*4];
-				tf.c[1] = ee[a*4+1];
-				tf.c[2] = ee[a*4+2];
-				tf.c[3] = ee[a*4+3];
-				cof[a] = (long)(tf.f * scale);
-				if( !SignCheck( cof[a], tf.f )) {
-					
-					// SetRStatus( RSQ, RSQ_COFOVFLW );
-					scale -= 1000;
-					Overflow = 1;
-					break;
-				}
-			}
-			WDTCN = WDRLD;// reload the watchdog
-		} while( Overflow );
-
-		// pressure range
-		PrsRange = (byte)(cof[37] / scale);
-
-		// max pressure
-		PMax.c[0] = ee[EE_PMAX]; 
-		PMax.c[1] = ee[EE_PMAX+1]; 
-		PMax.c[2] = ee[EE_PMAX+2]; 
-		PMax.c[3] = ee[EE_PMAX+3]; 
-		// min pressure
-		PMin.c[0] = ee[EE_PMIN]; 
-		PMin.c[1] = ee[EE_PMIN+1]; 
-		PMin.c[2] = ee[EE_PMIN+2]; 
-		PMin.c[3] = ee[EE_PMIN+3]; 
-
-		// max temperature
-		TMax.c[0] = ee[EE_TMAX];
-		TMax.c[1] = ee[EE_TMAX+1];
-		// min temperature
-		TMin.c[0] = ee[EE_TMIN];
-		TMin.c[1] = ee[EE_TMIN+1];
-
-	} else {
-		return FALSE;
-	}
-	return TRUE;
-}
-
-bit SignCheck( long a, float b ) {
-bit ab = 0; 
-bit bb = 0;
-
-	ab = (a < 0) ? 0 : 1;	
-	bb = (b < 0) ? 0 : 1;	
-	return( ab == bb );
-
-}
-
-/* ///////////////////////////////////////////////////////////////////////////
 	SPIOWriteBuf
 	TBD 		: 
 	Arguments	: byte buffer ptr, # bytes to write	
 	Returns 	: 
 /////////////////////////////////////////////////////////////////////////// */
+/*
 void SPIOWriteBuf( byte * b, byte len ) {
 	byte a;
 	for( a = 0; a < len; a++ ) {
 	   SPIOWrite( b[a] );
 	}
 }
+*/
 
 /* ///////////////////////////////////////////////////////////////////////////
 	SPIOWrite
@@ -599,24 +476,6 @@ byte a = 1;
 	return SPI0DAT; 
 }
 
-/**
- * @brief Calculates unadjusted, factory-compensated pressure. (For Maintenance)
- *
- * This function provides the factory-compensated pressure value before any
- * system-level offset and span calibration is applied. It uses the most
- * recent temperature reading for its calculation. The prototype is matched
- * to the original function for compatibility with the maintenance library.
- *
- * @param p The raw pressure ADC value to be compensated.
- * @return The factory-compensated pressure as a float.
- */
-float CompPressureUnAdjusted(long p)
-{
-    // Cast the input 'long' to 'unsigned int' to match the new function's
-    // requirements and use the last known temperature reading.
-    return Calculate_Compensated_Pressure((unsigned int)p, g_raw_temp_adc);
-}
-
 /* ///////////////////////////////////////////////////////////////////////////
 	WriteNVRam
 	TBD 		: 
@@ -639,16 +498,20 @@ void WriteNVRam( void ) {
 	Arguments	: raw temp reading
 	Returns 	: approximate temperature in cel
 /////////////////////////////////////////////////////////////////////////// */
+/*
 float TemperatureC( word r ) {
 
 	return(((float)(r - TMin.w)* (float)125/(TMax.w-TMin.w))) - 40;
 }
+*/
 
 /* ///////////////////////////////////////////////////////////////////////////
 	Convert temperature reading to Fahrenheit
 	Arguments	: raw temp reading
 	Returns 	: Fahrenheit
 /////////////////////////////////////////////////////////////////////////// */
+/*
 float TemperatureF( word r ) {
 	return((TemperatureC(r)*9)/5)+32;
 }
+*/
