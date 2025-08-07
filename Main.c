@@ -515,3 +515,37 @@ float TemperatureF( word r ) {
 	return((TemperatureC(r)*9)/5)+32;
 }
 */
+
+void Print_Float(float f, unsigned char precision)
+{
+    long integer_part;
+    long fractional_part;
+    long scale = 1;
+    unsigned char i;
+
+    for (i = 0; i < precision; i++) {
+        scale *= 10;
+    }
+
+    if (f < 0) {
+        printf("-");
+        f = -f;
+    }
+
+    integer_part = (long)f;
+    fractional_part = (long)((f - integer_part) * scale + 0.5);
+
+    printf("%ld.", integer_part);
+    
+    for (i = 10; i < scale; i *= 10) {
+        if (fractional_part < i) {
+            printf("0");
+        }
+    }
+    printf("%ld", fractional_part);
+}
+
+void ReloadWatchdog(void)
+{
+	WDTCN = WDRLD;
+}

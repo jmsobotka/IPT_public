@@ -16,6 +16,8 @@ void ResetPressureADC(void);
 void SPIOWrite( byte b );
 byte SPIORead( void );
 void WriteNVRam( void );
+void Print_Float(float f, unsigned char precision);
+void ReloadWatchdog(void);
 
 ////////////////////////////////////////////////////////////////////////////
 // defines for data locations within the IPT EEPROM block

@@ -1270,7 +1270,9 @@ byte a;
 			break;
 //	
 		case 12:
-			//printf( "Read: %lu %u %f\r", pr.l, tp.w, psi );
+			//printf("Read: %lu %u ", pr.l, tp.w);
+			//Print_Float(psi, 4);
+			//printf("\r");
 			printf("Not supported\r");
 			break;
 //
@@ -1285,13 +1287,17 @@ byte a;
 //	offset
 		case 15:
 			sscanf( cp,	"%bd", &offset);
-			printf("Offset: %bd %f \r",	offset, (offset * .0001));
+			printf("Offset: %bd ", offset);
+			Print_Float((offset * .0001), 4);
+			printf(" \r");
 			break;
 
 //	span
 		case 16:
 			sscanf( cp,	"%bd", &span);
-			printf("Span: %bd %f \r", span, (span * .0001));
+			printf("Span: %bd ", span);
+			Print_Float((span * .0001), 4);
+			printf(" \r");
 			break;
 				
 //	32 bit mult with 24 bit shift right

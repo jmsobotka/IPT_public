@@ -12,16 +12,53 @@
 #include "c8051f020_kdefs.h" // For sbit definition
 
 //=============================================================================
+// User-Configurable Temperature Range & Decimation
+//=============================================================================
+
+// Define the operational temperature range in Fahrenheit.
+// The driver will only load LUT data for this range.
+#define TEMP_LOW_F 32.0f
+#define TEMP_HIGH_F 110.0f // <-- You can increase this value to use more XDATA
+
+// Define the decimation factor for the temperature axis of the LUT.
+// A factor of 2 means every other temperature point will be loaded.
+#define TEMP_DECIMATION_FACTOR 2
+
+//=============================================================================
+// Compile-Time LUT Size Calculation
+//=============================================================================
+// These macros calculate the required array sizes based on the settings above.
+// Do not modify these directly.
+
+// 1. Convert user-defined Fahrenheit range to Celsius
+#define TEMP_LOW_C ((TEMP_LOW_F - 32.0f) * 5.0f / 9.0f)
+#define TEMP_HIGH_C ((TEMP_HIGH_F - 32.0f) * 5.0f / 9.0f)
+
+// 2. Define EEPROM's full temperature scale characteristics
+#define EEPROM_TEMP_MIN_C -55.0f
+#define EEPROM_TEMP_MAX_C 85.0f
+#define EEPROM_TEMP_POINTS 140.0f
+#define EEPROM_TEMP_SPAN (EEPROM_TEMP_MAX_C - EEPROM_TEMP_MIN_C)
+#define EEPROM_POINTS_PER_C (EEPROM_TEMP_POINTS / EEPROM_TEMP_SPAN)
+
+// 3. Calculate the start and end indices in the full EEPROM LUT
+#define TEMP_RANGE_START_INDEX (unsigned int)((TEMP_LOW_C - EEPROM_TEMP_MIN_C) * EEPROM_POINTS_PER_C)
+#define TEMP_RANGE_END_INDEX   (unsigned int)((TEMP_HIGH_C - EEPROM_TEMP_MIN_C) * EEPROM_POINTS_PER_C)
+
+// 4. Calculate the number of points in the selected range and after decimation
+#define TEMP_POINTS_IN_RANGE (TEMP_RANGE_END_INDEX - TEMP_RANGE_START_INDEX + 1)
+#define POINTS_T_DECIMATED ((TEMP_POINTS_IN_RANGE + TEMP_DECIMATION_FACTOR - 1) / TEMP_DECIMATION_FACTOR)
+
+// 5. Define final array sizes
+#define POINTS_P 30 // Number of pressure points is constant
+#define LUT_P_SIZE_DECIMATED (POINTS_T_DECIMATED * POINTS_P)
+
+//=============================================================================
 // Constant Definitions
 //=============================================================================
 
-// Defines the size of the pressure look-up table (LUT_P) after
-// decimation and range limiting have been applied.
-#define LUT_P_SIZE 1178
-
 // Constants derived from the SWD11587 EEPROM Layout document.
-#define POINTS_P 30           // Number of pressure points in the LUT.
-#define POINTS_T 140          // Full number of temperature points in the LUT.
+#define POINTS_T_FULL 140     // Full number of temperature points in the EEPROM LUT.
 #define POINTS_LIN_T 12       // Number of points in the temp linearization table.
 
 // EEPROM Base Addresses
@@ -66,18 +103,18 @@ typedef struct {
 // Global Variable Declarations
 //=============================================================================
 
-extern unsigned int xdata LUT_P[LUT_P_SIZE];
+extern float xdata LUT_P[LUT_P_SIZE_DECIMATED];
+extern float xdata LUT_T_ADC[POINTS_T_DECIMATED];
+extern float xdata LUT_P_ADC[POINTS_P];
+
 extern Lin_Data_Point xdata Lin_data_T[POINTS_LIN_T];
-extern unsigned int xdata LUT_T_ADC[POINTS_T];
-extern unsigned int xdata LUT_P_ADC[POINTS_P];
 extern unsigned int xdata ADC_config_P;
 extern unsigned int xdata ADC_config_T;
 extern unsigned int xdata ADC_mode;
 extern int xdata Max_P;
 extern int xdata Min_P;
 extern unsigned int xdata g_raw_temp_adc;
-extern ProductInfoType xdata g_ProductInfo; // New global for product info
-
+extern ProductInfoType xdata g_ProductInfo;
 
 //=============================================================================
 // Function Prototypes
@@ -90,15 +127,14 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
 float Apply_System_Calibration(float compensated_press, int offset, int span);
 float CompPressureUnadjusted(long p);
 void Load_Pressure_LUT(void);
-unsigned int Calculate_LUT_Start_Address(void);
 void Load_Lin_Data_T(void);
 void Load_LUT_T_ADC(void);
 void Load_LUT_P_ADC(void);
 void Load_ADC_Config(void);
-void Load_Product_Info(void); // New function prototype
+void Load_Product_Info(void);
 void Read_EEPROM_Bytes(unsigned char* buffer, unsigned int start_address, unsigned int count);
+void Read_EEPROM_Floats(float* buffer, unsigned int start_address, unsigned int count);
 void Display_MEMSCAP_EEPROM_Info(void);
-void Print_Float(float f, unsigned char precision);
 byte ReadEEProm(void);
 unsigned long Calculate_CRC32(unsigned char* d, unsigned int count);
 

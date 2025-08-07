@@ -71,17 +71,17 @@ code unsigned long crc_table[256] = {
 // Global Variables
 //=============================================================================
 
-// This global array will store the pressure look-up table.
-unsigned int xdata LUT_P[LUT_P_SIZE];
+// This global array will store the decimated pressure look-up table.
+float xdata LUT_P[LUT_P_SIZE_DECIMATED];
 
 // Global array for the temperature linearization table (ADC vs. Temp C).
 Lin_Data_Point xdata Lin_data_T[POINTS_LIN_T];
 
-// Global array for the temperature ADC values look-up table.
-unsigned int xdata LUT_T_ADC[POINTS_T];
+// Global array for the decimated temperature ADC values look-up table.
+float xdata LUT_T_ADC[POINTS_T_DECIMATED];
 
 // Global array for the pressure ADC values look-up table.
-unsigned int xdata LUT_P_ADC[POINTS_P];
+float xdata LUT_P_ADC[POINTS_P];
 
 // Global variables to hold ADC configuration settings loaded from EEPROM.
 unsigned int xdata ADC_config_P;
@@ -96,35 +96,6 @@ unsigned int xdata g_raw_temp_adc; // Global for latest temperature reading
 
 ProductInfoType xdata g_ProductInfo;
 
-void Print_Float(float f, unsigned char precision)
-{
-    long integer_part;
-    long fractional_part;
-    long scale = 1;
-    unsigned char i;
-
-    for (i = 0; i < precision; i++) {
-        scale *= 10;
-    }
-
-    if (f < 0) {
-        printf("-");
-        f = -f;
-    }
-
-    integer_part = (long)f;
-    fractional_part = (long)((f - integer_part) * scale + 0.5);
-
-    printf("%ld.", integer_part);
-    
-    for (i = 10; i < scale; i *= 10) {
-        if (fractional_part < i) {
-            printf("0");
-        }
-    }
-    printf("%ld", fractional_part);
-}
-
 //=============================================================================
 // Function Definitions
 //=============================================================================
@@ -138,8 +109,8 @@ void Initialize_Sensor(void)
     Load_Product_Info();
     Load_ADC_Config();
     Load_Lin_Data_T();
+    Load_LUT_P_ADC(); // Note: Must be loaded before other LUTs
     Load_LUT_T_ADC();
-    Load_LUT_P_ADC();
     Load_Pressure_LUT();
 }
 
@@ -199,10 +170,11 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
             x2 = Lin_data_T[i+1].adc_value;
             y2 = Lin_data_T[i+1].temperature_C;
             
-            // Perform linear interpolation
+            if ((x2 - x1) == 0) return y1; // Avoid division by zero
             return y1 + (y2 - y1) * ((float)raw_temp_adc - (float)x1) / ((float)x2 - (float)x1);
         }
     }
+
     // If the value is out of range, return the temperature from the closest endpoint.
     return (raw_temp_adc < Lin_data_T[0].adc_value) ? Lin_data_T[0].temperature_C : Lin_data_T[POINTS_LIN_T - 1].temperature_C;
 }
@@ -210,6 +182,7 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
 
 /**
  * @brief Calculates the final compensated pressure.
+ * @note This function is UPDATED to work with the new decimated LUTs.
  *
  * This function performs a bilinear interpolation using the loaded look-up
  * tables to convert raw pressure and temperature ADC values into a final,
@@ -223,10 +196,11 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
 {
     unsigned int i;
     unsigned int x1_idx = 0, x2_idx = 0; // Pressure indices
-    unsigned int y1_idx = 0, y2_idx = 0; // Temperature indices
+    unsigned int y1_idx = 0, y2_idx = 0; // Temperature indices (for decimated LUT)
     float x1, x2, y1, y2, q11, q12, q21, q22, x, y, p1, p2, p3, p4;
 
     // Find bracketing indices for pressure ADC value in LUT_P_ADC
+    // This LUT is not decimated.
     for (i = 0; i < POINTS_P - 1; i++) {
         if (raw_press_adc >= LUT_P_ADC[i] && raw_press_adc <= LUT_P_ADC[i+1]) {
             x1_idx = i;
@@ -235,8 +209,8 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
         }
     }
 
-    // Find bracketing indices for temperature ADC value in LUT_T_ADC
-    for (i = 0; i < POINTS_T - 1; i++) {
+    // Find bracketing indices for temperature ADC value in the DECIMATED LUT_T_ADC
+    for (i = 0; i < POINTS_T_DECIMATED - 1; i++) {
         if (comp_temp_adc >= LUT_T_ADC[i] && comp_temp_adc <= LUT_T_ADC[i+1]) {
             y1_idx = i;
             y2_idx = i + 1;
@@ -245,21 +219,27 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
     }
 
     // Get the four corner ADC values for interpolation
-    x1 = (float)LUT_P_ADC[x1_idx];
-    x2 = (float)LUT_P_ADC[x2_idx];
-    y1 = (float)LUT_T_ADC[y1_idx];
-    y2 = (float)LUT_T_ADC[y2_idx];
+    x1 = LUT_P_ADC[x1_idx];
+    x2 = LUT_P_ADC[x2_idx];
+    y1 = LUT_T_ADC[y1_idx];
+    y2 = LUT_T_ADC[y2_idx];
 
-    // Get the four corner pressure values from the main LUT_P table
-    // The table is flattened, so index is calculated as [row * num_columns + column]
-    q11 = (float)LUT_P[y1_idx * POINTS_P + x1_idx];
-    q12 = (float)LUT_P[y2_idx * POINTS_P + x1_idx];
-    q21 = (float)LUT_P[y1_idx * POINTS_P + x2_idx];
-    q22 = (float)LUT_P[y2_idx * POINTS_P + x2_idx];
+    // Get the four corner pressure values from the main decimated LUT_P table
+    // The table is flattened, so index is calculated as [row * num_columns + column].
+    // The number of columns is always POINTS_P.
+    q11 = LUT_P[y1_idx * POINTS_P + x1_idx];
+    q12 = LUT_P[y2_idx * POINTS_P + x1_idx];
+    q21 = LUT_P[y1_idx * POINTS_P + x2_idx];
+    q22 = LUT_P[y2_idx * POINTS_P + x2_idx];
 
     // Perform bilinear interpolation
     x = (float)raw_press_adc;
     y = (float)comp_temp_adc;
+
+    // Check for division by zero, which can happen if ADC values are identical
+    if ((x2 - x1) == 0 || (y2 - y1) == 0) {
+        return q11; // Return one of the corners if the interpolation area is zero
+    }
 
     p1 = q11 * (x2 - x) * (y2 - y);
     p2 = q21 * (x - x1) * (y2 - y);
@@ -268,7 +248,6 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
 
     return (p1 + p2 + p3 + p4) / ((x2 - x1) * (y2 - y1));
 }
-
 
 /**
  * @brief Gets raw ADC readings for temperature and pressure from the TP1200.
@@ -289,6 +268,7 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     SPIOWrite(0x08);
     SPIOWrite((single_conversion_mode >> 8) & 0xFF);
     SPIOWrite(single_conversion_mode & 0xFF);
+    ReloadWatchdog();
     while(MISO == 1);
     SPIOWrite(0x58);
     msb = SPIORead();
@@ -303,6 +283,7 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     SPIOWrite(0x08);
     SPIOWrite((single_conversion_mode >> 8) & 0xFF);
     SPIOWrite(single_conversion_mode & 0xFF);
+    ReloadWatchdog();
     while(MISO == 1);
     SPIOWrite(0x58);
     msb = SPIORead();
@@ -327,7 +308,7 @@ void Load_ADC_Config(void)
     lsb = SPIORead();
     msb = SPIORead();
     ADC_mode = ((unsigned int)msb << 8) | lsb;
-    SPIORead(); SPIORead();
+    SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
 
     CS_EE = 0;
@@ -337,7 +318,7 @@ void Load_ADC_Config(void)
     lsb = SPIORead();
     msb = SPIORead();
     ADC_config_P = ((unsigned int)msb << 8) | lsb;
-    SPIORead(); SPIORead();
+    SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
 
     CS_EE = 0;
@@ -347,7 +328,7 @@ void Load_ADC_Config(void)
     lsb = SPIORead();
     msb = SPIORead();
     ADC_config_T = ((unsigned int)msb << 8) | lsb;
-    SPIORead(); SPIORead();
+    SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
 
     CS_EE = 0;
@@ -355,7 +336,7 @@ void Load_ADC_Config(void)
     SPIOWrite((MAX_P_BASE_ADDRESS >> 8) & 0xFF);
     SPIOWrite(MAX_P_BASE_ADDRESS & 0xFF);
     lsb = SPIORead(); msb = SPIORead();
-    Max_P = ((unsigned int)msb << 8) | lsb;
+    Max_P = ((int)msb << 8) | lsb;
     CS_EE = 1;
 
     CS_EE = 0;
@@ -363,10 +344,9 @@ void Load_ADC_Config(void)
     SPIOWrite((MIN_P_BASE_ADDRESS >> 8) & 0xFF);
     SPIOWrite(MIN_P_BASE_ADDRESS & 0xFF);
     lsb = SPIORead(); msb = SPIORead();
-    Min_P = ((unsigned int)msb << 8) | lsb;
+    Min_P = ((int)msb << 8) | lsb;
     CS_EE = 1;
 }
-
 /**
  * @brief Loads the temperature linearization table (Lin_data_T) from EEPROM.
  */
@@ -396,113 +376,99 @@ void Load_Lin_Data_T(void)
 
 /**
  * @brief Loads the temperature ADC look-up table (LUT_T_ADC) from EEPROM.
+ * @note This function is UPDATED to read a range-limited and decimated subset
+ * of the full table from EEPROM to save XDATA space.
  */
 void Load_LUT_T_ADC(void)
 {
     unsigned int i;
-    unsigned char lsb, msb;
+    unsigned int eeprom_read_addr;
+    FloatByteUnion temp_converter;
 
-    CS_EE = 0;
-    SPIOWrite(0x03);
-    SPIOWrite((LUT_T_ADC_BASE_ADDRESS >> 8) & 0xFF);
-    SPIOWrite(LUT_T_ADC_BASE_ADDRESS & 0xFF);
-    for (i = 0; i < POINTS_T; i++)
+    for (i = 0; i < POINTS_T_DECIMATED; i++)
     {
-        lsb = SPIORead();
-        msb = SPIORead();
-        LUT_T_ADC[i] = ((unsigned int)msb << 8) | lsb;
+        // Calculate the index in the full EEPROM table, applying decimation
+        unsigned int full_table_index = TEMP_RANGE_START_INDEX + (i * TEMP_DECIMATION_FACTOR);
+
+        // Calculate the byte address in EEPROM for this float value
+        eeprom_read_addr = LUT_T_ADC_BASE_ADDRESS + (full_table_index * 4);
+
+        // Read the 4 bytes for the float value
+        Read_EEPROM_Bytes(temp_converter.c, eeprom_read_addr, 4);
+        
+        // Store the float value in our decimated XDATA table
+        LUT_T_ADC[i] = temp_converter.f;
     }
-    CS_EE = 1;
 }
 
 /**
  * @brief Loads the pressure ADC values look-up table (LUT_P_ADC) from EEPROM.
+ * @note This function is UPDATED to read 4-byte floats instead of 2-byte ints.
+ * This table is NOT decimated.
  */
 void Load_LUT_P_ADC(void)
 {
-    unsigned int i;
-    unsigned char lsb, msb;
-
-    CS_EE = 0;
-    SPIOWrite(0x03);
-    SPIOWrite((LUT_P_ADC_BASE_ADDRESS >> 8) & 0xFF);
-    SPIOWrite(LUT_P_ADC_BASE_ADDRESS & 0xFF);
-    for (i = 0; i < POINTS_P; i++)
-    {
-        lsb = SPIORead();
-        msb = SPIORead();
-        LUT_P_ADC[i] = ((unsigned int)msb << 8) | lsb;
-    }
-    CS_EE = 1;
-}
-
-
-/**
- * @brief Calculates the starting memory address for the LUT_P table read.
- */
-unsigned int Calculate_LUT_Start_Address(void)
-{
-    const float target_temp_F = 36.0f;
-    const float target_temp_C = (target_temp_F - 32.0f) * 5.0f / 9.0f;
-    unsigned int i;
-    float y1, y2;
-    unsigned int x1, x2;
-    float target_adc_f;
-    unsigned int target_adc;
-    unsigned int closest_index;
-    float min_diff;
-    unsigned int address_offset;
-
-    for (i = 0; i < POINTS_LIN_T - 1; i++)
-    {
-        if (target_temp_C >= Lin_data_T[i].temperature_C && target_temp_C <= Lin_data_T[i+1].temperature_C)
-        {
-            y1 = Lin_data_T[i].temperature_C;
-            x1 = Lin_data_T[i].adc_value;
-            y2 = Lin_data_T[i+1].temperature_C;
-            x2 = Lin_data_T[i+1].adc_value;
-            break;
-        }
-    }
-
-    target_adc_f = (float)x1 + ((float)x2 - (float)x1) * (target_temp_C - y1) / (y2 - y1);
-    target_adc = (unsigned int)target_adc_f;
-    closest_index = 0;
-    min_diff = -1.0f;
-
-    for (i = 0; i < POINTS_T; i++)
-    {
-        float diff = fabs((float)LUT_T_ADC[i] - (float)target_adc);
-        if (min_diff < 0 || diff < min_diff)
-        {
-            min_diff = diff;
-            closest_index = i;
-        }
-    }
-
-    address_offset = closest_index * POINTS_P * 2;
-
-    return LUT_P_BASE_ADDRESS + address_offset;
+    // The entire LUT_P_ADC table is read, as it is small and not decimated.
+    Read_EEPROM_Floats(LUT_P_ADC, LUT_P_ADC_BASE_ADDRESS, POINTS_P);
 }
 
 /**
  * @brief Loads the pressure look-up table (LUT_P) from the TP1200 EEPROM.
+ * @note This function is UPDATED to read a range-limited and decimated subset
+ * of the full table from EEPROM to save XDATA space.
  */
 void Load_Pressure_LUT(void)
 {
-    unsigned int start_address = Calculate_LUT_Start_Address();
     unsigned int i;
-    unsigned char lsb, msb;
+    unsigned int eeprom_row_addr;
+    float* xdata_row_ptr;
+
+    for (i = 0; i < POINTS_T_DECIMATED; i++)
+    {
+        // Calculate the index of the row to read from the full EEPROM table
+        unsigned int full_table_row_index = TEMP_RANGE_START_INDEX + (i * TEMP_DECIMATION_FACTOR);
+
+        // Calculate the starting byte address of that row in the EEPROM
+        // Each row has POINTS_P (30) floats, and each float is 4 bytes.
+        eeprom_row_addr = LUT_P_BASE_ADDRESS + (full_table_row_index * POINTS_P * 4);
+
+        // Calculate the pointer to the destination row in our XDATA table
+        xdata_row_ptr = &LUT_P[i * POINTS_P];
+
+        // Read the entire row (30 floats) from EEPROM into our XDATA table
+        Read_EEPROM_Floats(xdata_row_ptr, eeprom_row_addr, POINTS_P);
+    }
+}
+
+/**
+ * @brief Helper function to read a block of floats from a specific EEPROM address.
+ *
+ * @param buffer Pointer to the destination float array in XDATA.
+ * @param start_address The starting byte address in EEPROM.
+ * @param float_count The number of floats to read.
+ */
+void Read_EEPROM_Floats(float* buffer, unsigned int start_address, unsigned int float_count)
+{
+    unsigned int i;
+    FloatByteUnion temp_converter;
+
     CS_EE = 0;
-    SPIOWrite(0x03);
+    SPIOWrite(0x03); // Read command
     SPIOWrite((start_address >> 8) & 0xFF);
     SPIOWrite(start_address & 0xFF);
-    for (i = 0; i < LUT_P_SIZE; i++)
+    
+    for (i = 0; i < float_count; i++)
     {
-        lsb = SPIORead();
-        msb = SPIORead();
-        LUT_P[i] = ((unsigned int)msb << 8) | lsb;
+        // Read 4 bytes for one float
+        temp_converter.c[0] = SPIORead();
+        temp_converter.c[1] = SPIORead();
+        temp_converter.c[2] = SPIORead();
+        temp_converter.c[3] = SPIORead();
+        
+        // Assign the converted float to the buffer
+        buffer[i] = temp_converter.f;
     }
+    
     CS_EE = 1;
 }
 
@@ -536,37 +502,38 @@ void Display_MEMSCAP_EEPROM_Info(void)
     unsigned char temp_buffer[20]; // Small buffer for EEPROM reads
     unsigned long serial_number;
     float temp_f;
-
-    // --- Display Min/Max values (already loaded during initialization) ---
-    // Note: PMax/PMin are now the compensated values for the ADC limits.
-    // We need to read the ADC min/max from EEPROM to calculate this.
-    unsigned char p_min_adc_bytes[4], p_max_adc_bytes[4];
-    unsigned long p_min_adc, p_max_adc;
+    FloatByteUnion p_min_adc, p_max_adc;
 
     // --- Read and Display Serial Number (Bytes 8-11) ---
-    Read_EEPROM_Bytes(temp_buffer, 8, 4);
+    Read_EEPROM_Bytes(temp_buffer, SENSOR_SN_BASE_ADDRESS, 4);
     serial_number = *((unsigned long*)temp_buffer);
     printf("Sensor S/N: %lu\r", serial_number);
 
     // --- Read and Display Calibration Date (Bytes 20-23) ---
-    Read_EEPROM_Bytes(temp_buffer, 20, 4);
+    Read_EEPROM_Bytes(temp_buffer, CAL_DATE_BASE_ADDRESS, 4);
     printf("Cal Date: %u/%u/%u\r", (unsigned int)temp_buffer[1], (unsigned int)temp_buffer[0], *((unsigned int*)&temp_buffer[2]));
 
-    Read_EEPROM_Bytes(p_min_adc_bytes, ADC_MIN_P_BASE_ADDRESS, 4);
-    p_min_adc = *((unsigned long*)p_min_adc_bytes);
+    Read_EEPROM_Bytes(p_min_adc.c, ADC_MIN_P_BASE_ADDRESS, 4);
+    Read_EEPROM_Bytes(p_max_adc.c, ADC_MAX_P_BASE_ADDRESS, 4);
 
-    Read_EEPROM_Bytes(p_max_adc_bytes, ADC_MAX_P_BASE_ADDRESS, 4);
-    p_max_adc = *((unsigned long*)p_max_adc_bytes);
+    printf("Pressure Max "); Print_Float(p_max_adc.f, 0); printf(" ");
+    Print_Float(CompPressureUnAdjusted((long)p_max_adc.f), 4);
+    printf("\r");
 
-    printf("Pressure Max: %ld %f\r", p_max_adc, CompPressureUnAdjusted(p_max_adc));
-    printf("Pressure Min: %ld %f\r", p_min_adc, CompPressureUnAdjusted(p_min_adc));
+    printf("Pressure Min "); Print_Float(p_min_adc.f, 0); printf(" ");
+    Print_Float(CompPressureUnAdjusted((long)p_min_adc.f), 4);
+    printf("\r");
 
     // For temperature, we can use the loaded Lin_data_T table
     temp_f = (Lin_data_T[POINTS_LIN_T - 1].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Max: %u %f\r", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value, temp_f);
+    printf("Temperature Max %6u ", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value);
+    Print_Float(temp_f, 4);
+    printf("\r");
 
     temp_f = (Lin_data_T[0].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Min: %u %f\r", (unsigned int)Lin_data_T[0].adc_value, temp_f);
+    printf("Temperature Min %6u ", (unsigned int)Lin_data_T[0].adc_value);
+    Print_Float(temp_f, 4);
+    printf("\r");
 }
 
 //=============================================================================
