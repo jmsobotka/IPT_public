@@ -128,8 +128,11 @@ void Initialize_Sensor(void)
  */
 float Apply_System_Calibration(float compensated_press, int offset, int span)
 {
-    float final_pressure = compensated_press;
-    float pressure_range = (float)(Max_P - Min_P);
+    float final_pressure = 0.0f;
+    float pressure_range = 0.0f;
+
+    final_pressure = compensated_press;
+    pressure_range = (float)(Max_P - Min_P);
 
     // 1. Apply Offset (Zero-Point Adjustment)
     // The scaling factor of 0.0001 is derived from the original implementation's
@@ -158,7 +161,7 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
 {
     unsigned int i;
     float y1, y2; // Bracketing temperatures from Lin_data_T
-    unsigned int x1, x2; // Corresponding ADC values from Lin_data_T
+    float x1, x2; // Corresponding ADC values from Lin_data_T
 
     // Find the two points in the linearization table that bracket the raw ADC value.
     for (i = 0; i < POINTS_LIN_T - 1; i++)
@@ -170,8 +173,8 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
             x2 = Lin_data_T[i+1].adc_value;
             y2 = Lin_data_T[i+1].temperature_C;
             
-            if ((x2 - x1) == 0) return y1; // Avoid division by zero
-            return y1 + (y2 - y1) * ((float)raw_temp_adc - (float)x1) / ((float)x2 - (float)x1);
+            if ((x2 - x1) == 0.0f) return y1; // Avoid division by zero
+            return y1 + (y2 - y1) * ((float)raw_temp_adc - x1) / (x2 - x1);
         }
     }
 
@@ -259,9 +262,8 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
 
     single_conversion_mode = (ADC_mode & 0x1FFF) | 0x2000;
 
-    CS_PR = 0;
-
     // --- Get Pressure Reading ---
+    CS_PR = 0;
     SPIOWrite(0x10);
     SPIOWrite((ADC_config_P >> 8) & 0xFF);
     SPIOWrite(ADC_config_P & 0xFF);
@@ -275,8 +277,10 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     mid = SPIORead();
     lsb = SPIORead();
     *raw_press_adc = ((unsigned int)msb << 8) | mid;
+    CS_PR = 1;
 
     // --- Get Temperature Reading ---
+    CS_PR = 0;
     SPIOWrite(0x10);
     SPIOWrite((ADC_config_T >> 8) & 0xFF);
     SPIOWrite(ADC_config_T & 0xFF);
@@ -290,7 +294,6 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     mid = SPIORead();
     lsb = SPIORead();
     *raw_temp_adc = ((unsigned int)msb << 8) | mid;
-
     CS_PR = 1;
 }
 
@@ -347,13 +350,15 @@ void Load_ADC_Config(void)
     Min_P = ((int)msb << 8) | lsb;
     CS_EE = 1;
 }
+
 /**
  * @brief Loads the temperature linearization table (Lin_data_T) from EEPROM.
+ * @note This function is UPDATED to read two separate tables (a "Matrix")
+ * of 12 floats each, instead of one table of interleaved pairs.
  */
 void Load_Lin_Data_T(void)
 {
     unsigned int i;
-    unsigned char lsb, msb;
     FloatByteUnion temp_converter;
 
     CS_EE = 0;
@@ -362,14 +367,19 @@ void Load_Lin_Data_T(void)
     SPIOWrite(LIN_DATA_T_BASE_ADDRESS & 0xFF);
     for (i = 0; i < POINTS_LIN_T; i++)
     {
-        temp_converter.c[0] = SPIORead();
-        temp_converter.c[1] = SPIORead();
+        // Read Temperature float (4 bytes) and reverse byte order for endianness correction
+        temp_converter.c[3] = SPIORead(); // Read MSB into LSB position of union
         temp_converter.c[2] = SPIORead();
+        temp_converter.c[1] = SPIORead();
+        temp_converter.c[0] = SPIORead(); // Read LSB into MSB position of union
+        Lin_data_T[i].adc_value = temp_converter.f;
+
+        // Read ADC value float (4 bytes) and reverse byte order
         temp_converter.c[3] = SPIORead();
+        temp_converter.c[2] = SPIORead();
+        temp_converter.c[1] = SPIORead();
+        temp_converter.c[0] = SPIORead();
         Lin_data_T[i].temperature_C = temp_converter.f;
-        lsb = SPIORead();
-        msb = SPIORead();
-        Lin_data_T[i].adc_value = ((unsigned int)msb << 8) | lsb;
     }
     CS_EE = 1;
 }
@@ -460,10 +470,10 @@ void Read_EEPROM_Floats(float* buffer, unsigned int start_address, unsigned int 
     for (i = 0; i < float_count; i++)
     {
         // Read 4 bytes for one float
-        temp_converter.c[0] = SPIORead();
-        temp_converter.c[1] = SPIORead();
-        temp_converter.c[2] = SPIORead();
         temp_converter.c[3] = SPIORead();
+        temp_converter.c[2] = SPIORead();
+        temp_converter.c[1] = SPIORead();
+        temp_converter.c[0] = SPIORead();
         
         // Assign the converted float to the buffer
         buffer[i] = temp_converter.f;
@@ -516,24 +526,15 @@ void Display_MEMSCAP_EEPROM_Info(void)
     Read_EEPROM_Bytes(p_min_adc.c, ADC_MIN_P_BASE_ADDRESS, 4);
     Read_EEPROM_Bytes(p_max_adc.c, ADC_MAX_P_BASE_ADDRESS, 4);
 
-    printf("Pressure Max "); Print_Float(p_max_adc.f, 0); printf(" ");
-    Print_Float(CompPressureUnAdjusted((long)p_max_adc.f), 4);
-    printf("\r");
-
-    printf("Pressure Min "); Print_Float(p_min_adc.f, 0); printf(" ");
-    Print_Float(CompPressureUnAdjusted((long)p_min_adc.f), 4);
-    printf("\r");
+	printf("Pressure Max %11ld %f\r", (long)p_max_adc.f, CompPressureUnAdjusted((long)p_max_adc.f));
+    printf("Pressure Min %11ld %f\r", (long)p_min_adc.f, CompPressureUnAdjusted((long)p_min_adc.f));
 
     // For temperature, we can use the loaded Lin_data_T table
     temp_f = (Lin_data_T[POINTS_LIN_T - 1].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Max %6u ", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value);
-    Print_Float(temp_f, 4);
-    printf("\r");
+    printf("Temperature Max %6u %f\r", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value, temp_f);
 
     temp_f = (Lin_data_T[0].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Min %6u ", (unsigned int)Lin_data_T[0].adc_value);
-    Print_Float(temp_f, 4);
-    printf("\r");
+    printf("Temperature Min %6u %f\r", (unsigned int)Lin_data_T[0].adc_value, temp_f);
 }
 
 //=============================================================================

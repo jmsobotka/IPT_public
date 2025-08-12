@@ -18,7 +18,7 @@
 // Define the operational temperature range in Fahrenheit.
 // The driver will only load LUT data for this range.
 #define TEMP_LOW_F 32.0f
-#define TEMP_HIGH_F 110.0f // <-- You can increase this value to use more XDATA
+#define TEMP_HIGH_F 114.0f
 
 // Define the decimation factor for the temperature axis of the LUT.
 // A factor of 2 means every other temperature point will be loaded.
@@ -88,7 +88,7 @@
 // which contains a temperature in Celsius and its corresponding raw ADC value.
 typedef struct {
     float temperature_C;
-    unsigned int adc_value;
+    float adc_value;
 } Lin_Data_Point;
 
 // New struct to hold product information read from EEPROM

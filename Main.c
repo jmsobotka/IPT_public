@@ -49,7 +49,7 @@
 
 #define NAME "IPTI_B"
 #define PART ""
-#define VERSION "1.1.4"
+#define VERSION "1.2.0"
 
 #define PSI_TO_MBAR 68.94759
 
@@ -355,13 +355,11 @@ void main() {
 					
 // pressure				   note: this command DOES NOT return the command string...sigh
 			 	case HC_P1:
-					printf("#%02bdCP=", NetAdd);
 					if (NVR_Buf.displayunits == 0) { // PSI
-						Print_Float(psi, 4);
+					    printf("#%02bdCP=%7.4f\r", NetAdd, psi);
 					} else { // MBAR
-						Print_Float(psi * PSI_TO_MBAR, 3);
+					    printf("#%02bdCP=%7.3f\r", NetAdd, psi * PSI_TO_MBAR);
 					}
-					printf("\r");
 					break;
 // serial number
 			 	case HC_S_:	
@@ -371,17 +369,13 @@ void main() {
 // temperature C
 			 	case HC_T1:
 					// curve fit temperature
-					printf("%s", RetStr);
-                    Print_Float(compensated_temp_c, 1);
-                    printf("\r");
+					printf("%s%4.1f\r", RetStr, compensated_temp_c);
 				   	break;
 
 // temperature F
 			 	case HC_T3:
 					// curve fit temperature and convert to F
-					printf("%s", RetStr);
-                    Print_Float((compensated_temp_c * 9.0f / 5.0f) + 32.0f, 1);
-                    printf("\r");
+					printf("%s%4.1f\r", RetStr, (compensated_temp_c * 9.0f / 5.0f) + 32.0f);
 				   	break;
 
 // version number
@@ -515,35 +509,6 @@ float TemperatureF( word r ) {
 	return((TemperatureC(r)*9)/5)+32;
 }
 */
-
-void Print_Float(float f, unsigned char precision)
-{
-    long integer_part;
-    long fractional_part;
-    long scale = 1;
-    unsigned char i;
-
-    for (i = 0; i < precision; i++) {
-        scale *= 10;
-    }
-
-    if (f < 0) {
-        printf("-");
-        f = -f;
-    }
-
-    integer_part = (long)f;
-    fractional_part = (long)((f - integer_part) * scale + 0.5);
-
-    printf("%ld.", integer_part);
-    
-    for (i = 10; i < scale; i *= 10) {
-        if (fractional_part < i) {
-            printf("0");
-        }
-    }
-    printf("%ld", fractional_part);
-}
 
 void ReloadWatchdog(void)
 {
