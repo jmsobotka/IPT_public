@@ -52,6 +52,7 @@
 #define VERSION "1.2.0"
 
 #define PSI_TO_MBAR 68.94759
+#define MBAR_TO_PSI 0.0145038
 
 // integer scale for the temperature conversion routines
 // balances accuracy with the quad integer size
@@ -88,10 +89,10 @@ byte CRC;
 ////////////////////////////////////////////////////////////////////////
 
 // result
-data float psi = 0;
+data float mbar = 0;
 
 // fast ram calibration, with shadows in NVRam
-// byte displayunits = 0; // 0 psi, 1 mbar
+// byte displayunits = 1; // 0 psi, 1 mbar
 int offset = 0; 
 int span = 0;
 
@@ -182,7 +183,7 @@ void main() {
 	if( NVR_Buf.CRC != a ) {
 		offset = 0;
 		span = 0;
-		NVR_Buf.displayunits = 0; // psi
+		NVR_Buf.displayunits = 1; // mbar
 		memset(NVR_Buf.CalDate, 0, sizeof(NVR_Buf.CalDate));
 		NVR_Buf.NetAdd = 0;
 		SetRStatus( RSQ, RSQ_NVRAM );
@@ -249,7 +250,7 @@ void main() {
             g_raw_temp_adc = raw_temp_adc; // Update global for maintenance function
             compensated_temp_c = Calculate_Compensated_Temperature(raw_temp_adc);
             compensated_press = Calculate_Compensated_Pressure(raw_press_adc, raw_temp_adc);
-            psi = Apply_System_Calibration(compensated_press, offset, span);
+            mbar = Apply_System_Calibration(compensated_press, offset, span);
 			goto idle;
 
 		task0: // 7.8125ms   128hz
@@ -356,9 +357,9 @@ void main() {
 // pressure				   note: this command DOES NOT return the command string...sigh
 			 	case HC_P1:
 					if (NVR_Buf.displayunits == 0) { // PSI
-					    printf("#%02bdCP=%7.4f\r", NetAdd, psi);
+					    printf("#%02bdCP=%7.4f\r", NetAdd, mbar * MBAR_TO_PSI);
 					} else { // MBAR
-					    printf("#%02bdCP=%7.3f\r", NetAdd, psi * PSI_TO_MBAR);
+					    printf("#%02bdCP=%7.3f\r", NetAdd, mbar);
 					}
 					break;
 // serial number
