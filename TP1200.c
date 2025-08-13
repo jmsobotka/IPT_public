@@ -75,7 +75,8 @@ code unsigned long crc_table[256] = {
 float xdata LUT_P[LUT_P_SIZE_DECIMATED];
 
 // Global array for the temperature linearization table (ADC vs. Temp C).
-Lin_Data_Point xdata Lin_data_T[POINTS_LIN_T];
+float xdata Temp_Lin_ADC[POINTS_LIN_T];
+float xdata Temp_Lin_C[POINTS_LIN_T];
 
 // Global array for the decimated temperature ADC values look-up table.
 float xdata LUT_T_ADC[POINTS_T_DECIMATED];
@@ -153,41 +154,31 @@ float Apply_System_Calibration(float compensated_press, int offset, int span)
     return final_pressure;
 }
 
-/**
- * @brief Calculates the final compensated temperature.
- *
- * This function performs a linear interpolation on the Lin_data_T table
- * to convert a raw temperature ADC reading into a compensated temperature
- * value in degrees Celsius.
- *
- * @param raw_temp_adc The raw ADC value from the temperature sensor.
- * @return The compensated temperature as a float.
- */
 float Calculate_Compensated_Temperature(unsigned long raw_temp_adc)
 {
     unsigned int i;
-    float y1, y2; // Bracketing temperatures from Lin_data_T
-    float x1, x2; // Corresponding ADC values from Lin_data_T
+    float y1, y2; // Temperatures
+    float x1, x2; // ADC Counts
 
-    // Find the two points in the linearization table that bracket the raw ADC value.
     for (i = 0; i < POINTS_LIN_T - 1; i++)
     {
-        if (raw_temp_adc >= Lin_data_T[i].adc_value && raw_temp_adc <= Lin_data_T[i+1].adc_value)
+        // Use the new arrays for comparison
+        if (raw_temp_adc >= Temp_Lin_ADC[i] && raw_temp_adc <= Temp_Lin_ADC[i+1])
         {
-            x1 = Lin_data_T[i].adc_value;
-            y1 = Lin_data_T[i].temperature_C;
-            x2 = Lin_data_T[i+1].adc_value;
-            y2 = Lin_data_T[i+1].temperature_C;
+            x1 = Temp_Lin_ADC[i];
+            x2 = Temp_Lin_ADC[i+1];
+            y1 = Temp_Lin_C[i];
+            y2 = Temp_Lin_C[i+1];
             
-            if ((x2 - x1) == 0.0f) return y1; // Avoid division by zero
+            if ((x2 - x1) == 0.0f) return y1;
+
             return y1 + (y2 - y1) * ((float)raw_temp_adc - x1) / (x2 - x1);
         }
     }
 
-    // If the value is out of range, return the temperature from the closest endpoint.
-    return (raw_temp_adc < Lin_data_T[0].adc_value) ? Lin_data_T[0].temperature_C : Lin_data_T[POINTS_LIN_T - 1].temperature_C;
+    // Handle out-of-range values using the new arrays
+    return (raw_temp_adc < Temp_Lin_ADC[0]) ? Temp_Lin_C[0] : Temp_Lin_C[POINTS_LIN_T - 1];
 }
-
 
 /**
  * @brief Calculates the final compensated pressure.
@@ -377,47 +368,48 @@ void Load_ADC_Config(void)
     CS_EE = 1;
 }
 
-/**
- * @brief Loads the temperature linearization table (Lin_data_T) from EEPROM.
- * @note This function is UPDATED to read two separate tables (a "Matrix")
- * of 12 floats each, instead of one table of interleaved pairs.
- */
 void Load_Lin_Data_T(void)
 {
     unsigned int i;
-    FloatByteUnion temp_converter;
-    unsigned int base_address = LIN_DATA_T_BASE_ADDRESS;
-    unsigned int temp_values_address = base_address + (POINTS_LIN_T * 4);
+    unsigned char* dest_ptr_c;
+    unsigned char* dest_ptr_adc;
 
-    // --- First, read the contiguous block of 12 ADC values ---
+    // The EEPROM sends LSB first, but the 8051 is big-endian. We must
+    // read all 4 bytes and then write them to memory in reverse order.
+    unsigned char byte_buffer[4];
+
     CS_EE = 0;
-    SPIOWrite(0x03); // EEPROM Read command
-    SPIOWrite((base_address >> 8) & 0xFF);
-    SPIOWrite(base_address & 0xFF);
+    SPIOWrite(0x03); // Read command
+    SPIOWrite((LIN_DATA_T_BASE_ADDRESS >> 8) & 0xFF);
+    SPIOWrite(LIN_DATA_T_BASE_ADDRESS & 0xFF);
+
     for (i = 0; i < POINTS_LIN_T; i++)
     {
-        // Read 4 bytes for one float and perform endian conversion
-        temp_converter.c[3] = SPIORead();
-        temp_converter.c[2] = SPIORead();
-        temp_converter.c[1] = SPIORead();
-        temp_converter.c[0] = SPIORead();
-        Lin_data_T[i].adc_value = temp_converter.f;
-    }
-    CS_EE = 1;
+        // --- Read the interleaved ADC float for this point ---
+        byte_buffer[0] = SPIORead(); // LSB
+        byte_buffer[1] = SPIORead();
+        byte_buffer[2] = SPIORead();
+        byte_buffer[3] = SPIORead(); // MSB
 
-    // --- Second, read the contiguous block of 12 Temperature values ---
-    CS_EE = 0;
-    SPIOWrite(0x03); // EEPROM Read command
-    SPIOWrite((temp_values_address >> 8) & 0xFF);
-    SPIOWrite(temp_values_address & 0xFF);
-    for (i = 0; i < POINTS_LIN_T; i++)
-    {
-        // Read 4 bytes for one float and perform endian conversion
-        temp_converter.c[3] = SPIORead();
-        temp_converter.c[2] = SPIORead();
-        temp_converter.c[1] = SPIORead();
-        temp_converter.c[0] = SPIORead();
-        Lin_data_T[i].temperature_C = temp_converter.f;
+        // Byte-copy it to the Temp_Lin_ADC array in big-endian order
+        dest_ptr_adc = (unsigned char*)&Temp_Lin_ADC[i];
+        *dest_ptr_adc++ = byte_buffer[3]; // MSB
+        *dest_ptr_adc++ = byte_buffer[2];
+        *dest_ptr_adc++ = byte_buffer[1];
+        *dest_ptr_adc++ = byte_buffer[0]; // LSB
+
+        // --- Read the interleaved Temperature float for this point ---
+        byte_buffer[0] = SPIORead(); // LSB
+        byte_buffer[1] = SPIORead();
+        byte_buffer[2] = SPIORead();
+        byte_buffer[3] = SPIORead(); // MSB
+        
+        // Byte-copy it to the Temp_Lin_C array in big-endian order
+        dest_ptr_c = (unsigned char*)&Temp_Lin_C[i];
+        *dest_ptr_c++ = byte_buffer[3]; // MSB
+        *dest_ptr_c++ = byte_buffer[2];
+        *dest_ptr_c++ = byte_buffer[1];
+        *dest_ptr_c++ = byte_buffer[0]; // LSB
     }
     CS_EE = 1;
 }
@@ -499,24 +491,35 @@ void Read_EEPROM_Floats(float* buffer, unsigned int start_address, unsigned int 
 {
     unsigned int i;
     FloatByteUnion temp_converter;
+    unsigned char* dest_ptr; // Use a byte pointer for the destination
 
     CS_EE = 0;
     SPIOWrite(0x03); // Read command
     SPIOWrite((start_address >> 8) & 0xFF);
     SPIOWrite(start_address & 0xFF);
-    
+
+    // Cast the float buffer to a byte pointer for byte-level access
+    dest_ptr = (unsigned char*)buffer;
+
     for (i = 0; i < float_count; i++)
     {
-        // Read 4 bytes for one float
-        temp_converter.c[3] = SPIORead();
+        // Read 4 bytes from SPI and assemble them in big-endian order
+        // into the temporary union.
+        // NOTE: The byte at the lowest address (c[0]) should be the MSB.
+        temp_converter.c[3] = SPIORead(); // LSB from SPI
         temp_converter.c[2] = SPIORead();
         temp_converter.c[1] = SPIORead();
-        temp_converter.c[0] = SPIORead();
-        
-        // Assign the converted float to the buffer
-        buffer[i] = temp_converter.f;
+        temp_converter.c[0] = SPIORead(); // MSB from SPI
+
+        // Perform an explicit byte-by-byte copy from the union to the
+        // destination array to ensure correct endianness and avoid
+        // potential float-assignment issues with the compiler.
+        *dest_ptr++ = temp_converter.c[0];
+        *dest_ptr++ = temp_converter.c[1];
+        *dest_ptr++ = temp_converter.c[2];
+        *dest_ptr++ = temp_converter.c[3];
     }
-    
+
     CS_EE = 1;
 }
 
@@ -551,15 +554,22 @@ void Display_MEMSCAP_EEPROM_Info(void)
     unsigned long serial_number;
     float temp_f;
     FloatByteUnion p_min_adc, p_max_adc;
+    unsigned char cal_day, cal_month;
+    unsigned int cal_year;
 
     // --- Read and Display Serial Number (Bytes 8-11) ---
     Read_EEPROM_Bytes(temp_buffer, SENSOR_SN_BASE_ADDRESS, 4);
-    serial_number = *((unsigned long*)temp_buffer);
+    //serial_number = *((unsigned long*)temp_buffer);
+    serial_number = ((unsigned long)temp_buffer[3] << 24) | ((unsigned long)temp_buffer[2] << 16) | ((unsigned long)temp_buffer[1] << 8) | temp_buffer[0];
     printf("Sensor S/N: %lu\r", serial_number);
 
     // --- Read and Display Calibration Date (Bytes 20-23) ---
     Read_EEPROM_Bytes(temp_buffer, CAL_DATE_BASE_ADDRESS, 4);
-    printf("Cal Date: %u/%u/%u\r", (unsigned int)temp_buffer[1], (unsigned int)temp_buffer[0], *((unsigned int*)&temp_buffer[2]));
+    cal_day = temp_buffer[0];
+    cal_month = temp_buffer[1];
+    cal_year = ((unsigned int)temp_buffer[3] << 8) | temp_buffer[2];
+    //printf("Cal Date: %u/%u/%u\r", (unsigned int)temp_buffer[1], (unsigned int)temp_buffer[0], *((unsigned int*)&temp_buffer[2]));
+    printf("Cal Date: %u/%u/%u\r", cal_month, cal_day, cal_year);
 
     Read_EEPROM_Bytes(p_min_adc.c, ADC_MIN_P_BASE_ADDRESS, 4);
     Read_EEPROM_Bytes(p_max_adc.c, ADC_MAX_P_BASE_ADDRESS, 4);
@@ -568,12 +578,17 @@ void Display_MEMSCAP_EEPROM_Info(void)
     printf("Pressure Min %11ld %f\r", (long)p_min_adc.f, CompPressureUnAdjusted((long)p_min_adc.f));
 
     // For temperature, we can use the loaded Lin_data_T table
-    temp_f = (Lin_data_T[POINTS_LIN_T - 1].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Max %6u %f\r", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value, temp_f);
+    //temp_f = (Lin_data_T[POINTS_LIN_T - 1].temperature_C * 9.0f / 5.0f) + 32.0f;
+    temp_f = (Temp_Lin_C[POINTS_LIN_T - 1] * 9.0f / 5.0f) + 32.0f;
+    //printf("Temperature Max %6u %f\r", (unsigned int)Lin_data_T[POINTS_LIN_T - 1].adc_value, temp_f);
+    printf("Temperature Max %6u %f\r", (unsigned int)Temp_Lin_ADC[POINTS_LIN_T - 1], temp_f);
 
-    temp_f = (Lin_data_T[0].temperature_C * 9.0f / 5.0f) + 32.0f;
-    printf("Temperature Min %6u %f\r", (unsigned int)Lin_data_T[0].adc_value, temp_f);
+    //temp_f = (Lin_data_T[0].temperature_C * 9.0f / 5.0f) + 32.0f;
+    temp_f = (Temp_Lin_C[0] * 9.0f / 5.0f) + 32.0f;
+    //printf("Temperature Min %6u %f\r", (unsigned int)Lin_data_T[0].adc_value, temp_f);
+    printf("Temperature Min %6u %f\r", (unsigned int)Temp_Lin_ADC[0], temp_f);
 }
+
 
 //=============================================================================
 // Function Definitions

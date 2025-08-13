@@ -112,7 +112,8 @@ extern float xdata LUT_P[LUT_P_SIZE_DECIMATED];
 extern float xdata LUT_T_ADC[POINTS_T_DECIMATED];
 extern float xdata LUT_P_ADC[POINTS_P];
 
-extern Lin_Data_Point xdata Lin_data_T[POINTS_LIN_T];
+extern float xdata Temp_Lin_ADC[POINTS_LIN_T];
+extern float xdata Temp_Lin_C[POINTS_LIN_T];
 extern unsigned int xdata ADC_config_P;
 extern unsigned int xdata ADC_config_T;
 extern unsigned int xdata ADC_mode;
