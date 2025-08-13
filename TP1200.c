@@ -92,9 +92,15 @@ unsigned int xdata ADC_mode;
 int xdata Max_P;
 int xdata Min_P;
 
-unsigned int xdata g_raw_temp_adc; // Global for latest temperature reading
+unsigned long xdata g_raw_temp_adc; // Global for latest temperature reading
 
 ProductInfoType xdata g_ProductInfo;
+
+unsigned long xdata ADC_offset_P;
+unsigned long xdata ADC_gain_P;
+unsigned long xdata ADC_offset_T;
+unsigned long xdata ADC_gain_T;
+unsigned char xdata ADC_gpocon;
 
 //=============================================================================
 // Function Definitions
@@ -157,7 +163,7 @@ float Apply_System_Calibration(float compensated_press, int offset, int span)
  * @param raw_temp_adc The raw ADC value from the temperature sensor.
  * @return The compensated temperature as a float.
  */
-float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
+float Calculate_Compensated_Temperature(unsigned long raw_temp_adc)
 {
     unsigned int i;
     float y1, y2; // Bracketing temperatures from Lin_data_T
@@ -195,7 +201,7 @@ float Calculate_Compensated_Temperature(unsigned int raw_temp_adc)
  * @param comp_temp_adc The compensated temperature ADC value (used for indexing).
  * @return The compensated pressure as a float.
  */
-float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int comp_temp_adc)
+float Calculate_Compensated_Pressure(unsigned long raw_press_adc, unsigned long comp_temp_adc)
 {
     unsigned int i;
     unsigned int x1_idx = 0, x2_idx = 0; // Pressure indices
@@ -255,7 +261,7 @@ float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int co
 /**
  * @brief Gets raw ADC readings for temperature and pressure from the TP1200.
  */
-void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp_adc)
+void Get_Raw_Sensor_Readings(unsigned long* raw_press_adc, unsigned long* raw_temp_adc)
 {
     unsigned char msb, mid, lsb;
     unsigned int single_conversion_mode;
@@ -276,7 +282,7 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     msb = SPIORead();
     mid = SPIORead();
     lsb = SPIORead();
-    *raw_press_adc = ((unsigned int)msb << 8) | mid;
+    *raw_press_adc = ((unsigned long)msb << 16) | ((unsigned long)mid << 8) | lsb;
     CS_PR = 1;
 
     // --- Get Temperature Reading ---
@@ -293,7 +299,7 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
     msb = SPIORead();
     mid = SPIORead();
     lsb = SPIORead();
-    *raw_temp_adc = ((unsigned int)msb << 8) | mid;
+    *raw_temp_adc = ((unsigned long)msb << 16) | ((unsigned long)mid << 8) | lsb;
     CS_PR = 1;
 }
 
@@ -302,6 +308,7 @@ void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp
  */
 void Load_ADC_Config(void)
 {
+    unsigned char buffer[4];
     unsigned char lsb, msb;
 
     CS_EE = 0;
@@ -314,6 +321,9 @@ void Load_ADC_Config(void)
     SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
 
+    // Load ADC_gpocon
+    Read_EEPROM_Bytes(&ADC_gpocon, ADC_GPOCON_BASE_ADDRESS, 1);
+
     CS_EE = 0;
     SPIOWrite(0x03);
     SPIOWrite((ADC_CONFIG_P_BASE_ADDRESS >> 8) & 0xFF);
@@ -324,6 +334,14 @@ void Load_ADC_Config(void)
     SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
 
+    // Load ADC_offset_P
+    Read_EEPROM_Bytes(buffer, ADC_OFFSET_P_BASE_ADDRESS, 4);
+    ADC_offset_P = ((unsigned long)buffer[3] << 24) | ((unsigned long)buffer[2] << 16) | ((unsigned long)buffer[1] << 8) | buffer[0];
+
+    // Load ADC_gain_P
+    Read_EEPROM_Bytes(buffer, ADC_GAIN_P_BASE_ADDRESS, 4);
+    ADC_gain_P = ((unsigned long)buffer[3] << 24) | ((unsigned long)buffer[2] << 16) | ((unsigned long)buffer[1] << 8) | buffer[0];
+
     CS_EE = 0;
     SPIOWrite(0x03);
     SPIOWrite((ADC_CONFIG_T_BASE_ADDRESS >> 8) & 0xFF);
@@ -333,6 +351,14 @@ void Load_ADC_Config(void)
     ADC_config_T = ((unsigned int)msb << 8) | lsb;
     SPIORead(); SPIORead(); // Consume the rest of the 32-bit field
     CS_EE = 1;
+
+    // Load ADC_offset_T
+    Read_EEPROM_Bytes(buffer, ADC_OFFSET_T_BASE_ADDRESS, 4);
+    ADC_offset_T = ((unsigned long)buffer[3] << 24) | ((unsigned long)buffer[2] << 16) | ((unsigned long)buffer[1] << 8) | buffer[0];
+
+    // Load ADC_gain_T
+    Read_EEPROM_Bytes(buffer, ADC_GAIN_T_BASE_ADDRESS, 4);
+    ADC_gain_T = ((unsigned long)buffer[3] << 24) | ((unsigned long)buffer[2] << 16) | ((unsigned long)buffer[1] << 8) | buffer[0];
 
     CS_EE = 0;
     SPIOWrite(0x03);
@@ -360,21 +386,33 @@ void Load_Lin_Data_T(void)
 {
     unsigned int i;
     FloatByteUnion temp_converter;
+    unsigned int base_address = LIN_DATA_T_BASE_ADDRESS;
+    unsigned int temp_values_address = base_address + (POINTS_LIN_T * 4);
 
+    // --- First, read the contiguous block of 12 ADC values ---
     CS_EE = 0;
-    SPIOWrite(0x03);
-    SPIOWrite((LIN_DATA_T_BASE_ADDRESS >> 8) & 0xFF);
-    SPIOWrite(LIN_DATA_T_BASE_ADDRESS & 0xFF);
+    SPIOWrite(0x03); // EEPROM Read command
+    SPIOWrite((base_address >> 8) & 0xFF);
+    SPIOWrite(base_address & 0xFF);
     for (i = 0; i < POINTS_LIN_T; i++)
     {
-        // Read Temperature float (4 bytes) and reverse byte order for endianness correction
-        temp_converter.c[3] = SPIORead(); // Read MSB into LSB position of union
+        // Read 4 bytes for one float and perform endian conversion
+        temp_converter.c[3] = SPIORead();
         temp_converter.c[2] = SPIORead();
         temp_converter.c[1] = SPIORead();
-        temp_converter.c[0] = SPIORead(); // Read LSB into MSB position of union
+        temp_converter.c[0] = SPIORead();
         Lin_data_T[i].adc_value = temp_converter.f;
+    }
+    CS_EE = 1;
 
-        // Read ADC value float (4 bytes) and reverse byte order
+    // --- Second, read the contiguous block of 12 Temperature values ---
+    CS_EE = 0;
+    SPIOWrite(0x03); // EEPROM Read command
+    SPIOWrite((temp_values_address >> 8) & 0xFF);
+    SPIOWrite(temp_values_address & 0xFF);
+    for (i = 0; i < POINTS_LIN_T; i++)
+    {
+        // Read 4 bytes for one float and perform endian conversion
         temp_converter.c[3] = SPIORead();
         temp_converter.c[2] = SPIORead();
         temp_converter.c[1] = SPIORead();
@@ -613,4 +651,79 @@ float CompPressureUnAdjusted(long p)
     // Cast the input 'long' to 'unsigned int' to match the new function's
     // requirements and use the last known temperature reading.
     return Calculate_Compensated_Pressure((unsigned int)p, g_raw_temp_adc);
+}
+
+/**
+ * @brief Configures the AD7793 ADC with settings from the EEPROM.
+ *
+ * This function implements the initialization sequence described in section
+ * 6.2.1 of the TP1200 User Manual. It must be called once at startup after
+ * the EEPROM data has been loaded.
+ */
+void Initialize_ADC(void)
+{
+    CS_PR = 0; // Assert Chip Select for ADC
+
+    // 1. Reset the ADC
+    SPIOWrite(0xFF);
+    SPIOWrite(0xFF);
+    SPIOWrite(0xFF);
+    SPIOWrite(0xFF);
+    
+    CS_PR = 1;
+    USDelay(2000); // Wait >500us after reset, 2ms is safe
+    CS_PR = 0;
+
+    // 2. Write to Mode Register (16 bits)
+    SPIOWrite(0x08);
+    SPIOWrite((ADC_mode >> 8) & 0xFF);
+    SPIOWrite(ADC_mode & 0xFF);
+    
+    // 3. Write to IO Register (8 bits)
+    SPIOWrite(0x28);
+    SPIOWrite(ADC_gpocon);
+
+    // 4. Write Pressure Channel Config (16 bits), Offset (24 bits), and Gain (24 bits)
+    SPIOWrite(0x10);
+    SPIOWrite((ADC_config_P >> 8) & 0xFF);
+    SPIOWrite(ADC_config_P & 0xFF);
+
+    SPIOWrite(0x30);
+    SPIOWrite((ADC_offset_P >> 16) & 0xFF);
+    SPIOWrite((ADC_offset_P >> 8) & 0xFF);
+    SPIOWrite(ADC_offset_P & 0xFF);
+
+    SPIOWrite(0x38);
+    SPIOWrite((ADC_gain_P >> 16) & 0xFF);
+    SPIOWrite((ADC_gain_P >> 8) & 0xFF);
+    SPIOWrite(ADC_gain_P & 0xFF);
+
+    // 5. Write Temperature Channel Config (16 bits), Offset (24 bits), and Gain (24 bits)
+    SPIOWrite(0x10);
+    SPIOWrite((ADC_config_T >> 8) & 0xFF);
+    SPIOWrite(ADC_config_T & 0xFF);
+
+    SPIOWrite(0x30);
+    SPIOWrite((ADC_offset_T >> 16) & 0xFF);
+    SPIOWrite((ADC_offset_T >> 8) & 0xFF);
+    SPIOWrite(ADC_offset_T & 0xFF);
+
+    SPIOWrite(0x38);
+    SPIOWrite((ADC_gain_T >> 16) & 0xFF);
+    SPIOWrite((ADC_gain_T >> 8) & 0xFF);
+    SPIOWrite(ADC_gain_T & 0xFF);
+
+    CS_PR = 1; // De-assert Chip Select for ADC
+}
+
+/*	///////////////////////////////////////////////////////////////////////////
+  USDelay( word t)
+	 Description:
+		 5.4 microseconds	: the	time taken by light to travel	one mile	in	a vacuum
+	 Arguments:
+	 Returns:
+/////////////////////////////////////////////////////////////////////////// */
+void USDelay( word t) {
+	while(t--)
+		;
 }

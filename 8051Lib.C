@@ -468,32 +468,6 @@ byte ShiftMask; //
 #endif
 
 /*	///////////////////////////////////////////////////////////////////////////
-//	MSDelay(	word t)
-Description:driven by Timer4 if enabled, else count millisec timer
-Arguments:
-Returns:
-/////////////////////////////////////////////////////////////////////////// */
-#ifdef SET_MSDELAY
-void MSDelay( word t) {
-
-	if(TMR4CN &	0x04)	{ // timer 4 enabled
-		SetTimerCounter( 1, 25 * t	);
-		while( t4[1].status == COUNTING ) {
-			WDTCN	= WDRLD;// reload	the watchdog
-		}
-		t4[1].status =	DISABLED;
-
-	} else {
-		while(t--) {
-			USDelay(1000);
-			WDTCN	= WDRLD;// reload	the watchdog
-		}
-	}
-}
-
-#endif
-
-/*	///////////////////////////////////////////////////////////////////////////
   void Strup( char *	s )
 	 Description:
 		 uppercase a string
@@ -506,20 +480,6 @@ int i;
 		s[i] = toupper(s[i]);
 		i++;
 	}
-}
-#endif
-
-/*	///////////////////////////////////////////////////////////////////////////
-  USDelay( word t)
-	 Description:
-		 5.4 microseconds	: the	time taken by light to travel	one mile	in	a vacuum
-	 Arguments:
-	 Returns:
-/////////////////////////////////////////////////////////////////////////// */
-#ifdef SET_USDELAY
-void USDelay( word t) {
-	while(t--)
-		;
 }
 #endif
 

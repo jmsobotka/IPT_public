@@ -241,8 +241,6 @@ byte BitPos8(byte b);
 byte BitCnt8(byte b);
 byte BitRev8(byte b);
 void Strup( char * s );
-void MSDelay( word t);
-void USDelay( word t);
 word GetLastADC( byte c );
 float FConvert( float c );
 float CpuTemperature(void);

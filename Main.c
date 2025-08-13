@@ -116,7 +116,7 @@ NVR_BufType NVR_Buf;
 void main() {
     byte a;
     data char RetStr[10]; // return packet header (not used for pressure)
-    unsigned int raw_temp_adc, raw_press_adc;
+    unsigned long raw_temp_adc, raw_press_adc;
     float compensated_temp_c;
     float compensated_press;
 
@@ -198,7 +198,8 @@ void main() {
 		NetAdd = NVR_Buf.NetAdd;
 	}
 
-    Initialize_Sensor(); // <<< CALL TO NEW SENSOR INITIALIZER
+    Initialize_Sensor();
+    Initialize_ADC();
 
 ////////////////////////////////////////////////////////////
 	EA = 1;  // interrupt enable

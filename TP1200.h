@@ -62,18 +62,23 @@
 #define POINTS_LIN_T 12       // Number of points in the temp linearization table.
 
 // EEPROM Base Addresses
-#define SENSOR_SN_BASE_ADDRESS 8
-#define CAL_DATE_BASE_ADDRESS 20
-#define ADC_MODE_BASE_ADDRESS 24
-#define ADC_CONFIG_P_BASE_ADDRESS 32
-#define ADC_CONFIG_T_BASE_ADDRESS 68
-#define ADC_MAX_P_BASE_ADDRESS 44
-#define ADC_MIN_P_BASE_ADDRESS 48
-#define MAX_P_BASE_ADDRESS 52
-#define MIN_P_BASE_ADDRESS 54
-#define LUT_P_BASE_ADDRESS 788
-#define LUT_T_ADC_BASE_ADDRESS 228
-#define LUT_P_ADC_BASE_ADDRESS 108
+#define SENSOR_SN_BASE_ADDRESS      8
+#define CAL_DATE_BASE_ADDRESS      20
+#define ADC_MODE_BASE_ADDRESS      24
+#define ADC_GPOCON_BASE_ADDRESS    28
+#define ADC_CONFIG_P_BASE_ADDRESS  32
+#define ADC_OFFSET_P_BASE_ADDRESS  36
+#define ADC_GAIN_P_BASE_ADDRESS    40
+#define ADC_MAX_P_BASE_ADDRESS     44
+#define ADC_MIN_P_BASE_ADDRESS     48
+#define MAX_P_BASE_ADDRESS         52
+#define MIN_P_BASE_ADDRESS         54
+#define ADC_CONFIG_T_BASE_ADDRESS  68
+#define ADC_OFFSET_T_BASE_ADDRESS  72
+#define ADC_GAIN_T_BASE_ADDRESS    76
+#define LUT_P_ADC_BASE_ADDRESS    108
+#define LUT_T_ADC_BASE_ADDRESS    228
+#define LUT_P_BASE_ADDRESS        788
 #define LIN_DATA_T_BASE_ADDRESS 17592
 
 //=============================================================================
@@ -113,17 +118,23 @@ extern unsigned int xdata ADC_config_T;
 extern unsigned int xdata ADC_mode;
 extern int xdata Max_P;
 extern int xdata Min_P;
-extern unsigned int xdata g_raw_temp_adc;
+extern unsigned long xdata g_raw_temp_adc;
 extern ProductInfoType xdata g_ProductInfo;
+
+extern unsigned long xdata ADC_offset_P;
+extern unsigned long xdata ADC_gain_P;
+extern unsigned long xdata ADC_offset_T;
+extern unsigned long xdata ADC_gain_T;
+extern unsigned char xdata ADC_gpocon;
 
 //=============================================================================
 // Function Prototypes
 //=============================================================================
 
 void Initialize_Sensor(void);
-void Get_Raw_Sensor_Readings(unsigned int* raw_press_adc, unsigned int* raw_temp_adc);
-float Calculate_Compensated_Temperature(unsigned int raw_temp_adc);
-float Calculate_Compensated_Pressure(unsigned int raw_press_adc, unsigned int comp_temp_adc);
+void Get_Raw_Sensor_Readings(unsigned long* raw_press_adc, unsigned long* raw_temp_adc);
+float Calculate_Compensated_Temperature(unsigned long raw_temp_adc);
+float Calculate_Compensated_Pressure(unsigned long raw_press_adc, unsigned long comp_temp_adc);
 float Apply_System_Calibration(float compensated_press, int offset, int span);
 float CompPressureUnadjusted(long p);
 void Load_Pressure_LUT(void);
@@ -137,5 +148,7 @@ void Read_EEPROM_Floats(float* buffer, unsigned int start_address, unsigned int 
 void Display_MEMSCAP_EEPROM_Info(void);
 byte ReadEEProm(void);
 unsigned long Calculate_CRC32(unsigned char* d, unsigned int count);
+void Initialize_ADC(void);
+void USDelay( word t);
 
 #endif // TP1200_H
